@@ -25,21 +25,25 @@ argparser.add_argument('--batch-sizes', nargs='+', type=int, default=[
 argparser.add_argument('--num_neighbors', type=ast.literal_eval, default=[
     # [2, 2],
     # [-1],
-    [15, 10, 5],
-    # [20, 15, 10],
+    # 512,
+    # 1024,
+    # 2048,
+    # 4096,
+    # 8192,
 ])
+
 argparser.add_argument('--replace', action='store_true')
 argparser.add_argument('--directed', action='store_true')
 argparser.add_argument('--shuffle', action='store_true')
 args = argparser.parse_args()
 
-# edge_index = torch.tensor([[0, 1, 0, 4, 1, 2, 2, 3, 2, 5, 3, 4, 3, 5, 6, 3, 6, 4, 6, 5, 6, 7, 7, 8, 8, 5],
-#                            [1, 0, 4, 0, 2, 1, 3, 2, 5, 2, 4, 3, 5, 3, 3, 6, 4, 6, 5, 6, 7, 6, 8, 7, 5, 8]], dtype=torch.long)
-# x = torch.tensor([[-1], [0], [1], [2], [3], [4], [5], [6], [7]], dtype=torch.float)
+edge_index = torch.tensor([[0, 1, 0, 4, 1, 2, 2, 3, 2, 5, 3, 4, 3, 5, 6, 3, 6, 4, 6, 5, 6, 7, 7, 8, 8, 5],
+                           [1, 0, 4, 0, 2, 1, 3, 2, 5, 2, 4, 3, 5, 3, 3, 6, 4, 6, 5, 6, 7, 6, 8, 7, 5, 8]], dtype=torch.long)
+x = torch.tensor([[-1], [0], [1], [2], [3], [4], [5], [6], [7]], dtype=torch.float)
 
-# data = Data(x=x, edge_index=edge_index, y=2)
+data = Data(x=x, edge_index=edge_index, y=2)
 
-# num_nodes = 9
+num_nodes = 9
 
 @withSeed
 @withDataset('DIMACS10', 'citationCiteseer')
@@ -47,9 +51,9 @@ def test_neighbor(dataset, **kwargs):
     (rowptr, col), num_nodes = dataset, dataset[0].size(0) - 1
     # dgl_graph = dgl.graph(('csc', (rowptr, col, torch.arange(col.size(0)))))
 
-    # out = to_csc(data, device='cpu', share_memory=False,
-    #                      is_sorted=False, src_node_time=None)
-    # rowptr, col, _ = out
+    out = to_csc(data, device='cpu', share_memory=False,
+                         is_sorted=False, src_node_time=None)
+    rowptr, col, _ = out
 
     if args.shuffle:
         node_perm = torch.randperm(num_nodes)

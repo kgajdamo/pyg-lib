@@ -55,16 +55,14 @@ class NeighborSampler {
       }
     }
 
-    auto job_size = (end - begin) / num_threads;
+    auto job_size = (end - begin) / num_threads + 1;
     threads_offsets_.resize(num_threads);
 
     for (int tid=1; tid<num_threads; tid++) {
-      auto thread_begin = (tid - 1) * job_size;
-      scalar_t allocation_size = get_allocation_size_(global_src_nodes, thread_begin, thread_begin + job_size, count);
+      auto prev_thread_begin = (tid - 1) * job_size;
+      scalar_t allocation_size = get_allocation_size_(global_src_nodes, prev_thread_begin, prev_thread_begin + job_size, count);
       threads_offsets_[tid] = threads_offsets_[tid - 1] + allocation_size;
     }
-    // std::cout<<"threads_offsets_="<<threads_offsets_<<std::endl;
-    std::cout<<"sampled_rows="<<sampled_rows_<<std::endl;
   }
 
   void uniform_sample(const node_t global_src_node,
@@ -122,7 +120,6 @@ class NeighborSampler {
     const auto col = pyg::utils::from_vector(sampled_cols_);
     c10::optional<at::Tensor> edge_id = c10::nullopt;
     if (save_edge_ids) {
-      // std::cout<<"sampled_edge_ids_="<<sampled_edge_ids_<<std::endl;
       edge_id = pyg::utils::from_vector(sampled_edge_ids_);
     }
     if (!csc) {
@@ -224,20 +221,15 @@ class NeighborSampler {
     const auto global_dst_node_value = col_[edge_id];
     const auto global_dst_node =
         to_node_t(global_dst_node_value, global_src_node);
-    // std::cout<<"global_dst_node_value="<<global_dst_node_value<<std::endl;
-    // std::cout<<"global_src_node="<<global_src_node<<std::endl;
     // TODO: consider using exists + map + insert
-    // const auto res = dst_mapper.insert(global_dst_node);
+    const auto res = dst_mapper.insert(global_dst_node);
     // if (res.second) {
       out_global_dst_nodes.push_back(global_dst_node);
     // }
     if (save_edges) {
-      // std::cout<<"thread_counter="<<thread_counter<<std::endl;
-      // std::cout<<"thread_id="<<thread_id<<std::endl;
-      // std::cout<<"offset="<<offset<<std::endl;
       sampled_rows_[sampled_id_offset_ + threads_offsets_[thread_id] + thread_counter] = local_src_node;
 
-      sampled_cols_[sampled_id_offset_ + threads_offsets_[thread_id] + thread_counter] = 0;
+      sampled_cols_[sampled_id_offset_ + threads_offsets_[thread_id] + thread_counter] = res.first;
       if (save_edge_ids) {
         sampled_edge_ids_[sampled_id_offset_ + threads_offsets_[thread_id] + thread_counter] = edge_id;
       }
@@ -245,8 +237,8 @@ class NeighborSampler {
     ++thread_counter;
   }
 
-  size_t sampled_id_offset_ = 0;
-  std::vector<int> threads_offsets_ = {0};
+  int64_t sampled_id_offset_ = 0;
+  std::vector<scalar_t> threads_offsets_ = {0};
 
   const scalar_t* rowptr_;
   const scalar_t* col_;
@@ -325,62 +317,21 @@ sample(const at::Tensor& rowptr,
   }
 
   size_t begin = 0, end = seed.size(0);
-  std::cout<<"end="<<end<<std::endl;
   for (size_t ell = 0; ell < num_neighbors.size(); ++ell) {
     const auto count = num_neighbors[ell];
 
     int size = end - begin; // chunk
+    
 
-    // int job_size = size;
-    int requested_num_threads = 1;
-    if (size % 16 == 0) {
-      requested_num_threads = 16;
-    // } else if (size % 15 == 0) {
-    //   requested_num_threads = 15;
-    // } else if (size % 14 == 0) {
-    //   requested_num_threads = 14;
-    // } else if (size % 13 == 0) {
-    //   requested_num_threads = 13;
-    // } else if (size % 12 == 0) {
-    //   requested_num_threads = 12;
-    // } else if (size % 10 == 0) {
-    //   requested_num_threads = 10;
-    // } else if (size % 9 == 0) {
-    //   requested_num_threads = 9;
-    } else if (size % 8 == 0) {
-      requested_num_threads = 8;
-    // } else if (size % 7 == 0) {
-    //   requested_num_threads = 7;
-    // } else if (size % 6 == 0) {
-    //   requested_num_threads = 6;
-    // } else if (size % 5 == 0) {
-      // requested_num_threads = 5;
-    } else if (size % 4 == 0) {
-      requested_num_threads = 4;
-    // } else if (size % 3 == 0) {
-      // requested_num_threads = 3;
-    } else if (size % 2 == 0) {
-      requested_num_threads = 2;
-    }
-    std::cout<<"num_threads="<<requested_num_threads<<std::endl;
+    int requested_num_threads = 2;
+
     // preparation for going parallel
     sampler.allocate_resources(sampled_nodes, begin, end, count, requested_num_threads);
     // fixed threads number just for experiment
 
+    int job_size = size / requested_num_threads + 1;
+    std::cout<<"job_size"<<job_size<<std::endl;
 
-    int job_size = size / requested_num_threads;
-
-    // int job_size = 512;
-    // int requested_num_threads = ((end - begin) / job_size) + 1;
-    // requested_num_threads =
-    //     requested_num_threads < 4 ? 4 : requested_num_threads;
-
-    // int requested_num_threads = ((end - begin) / job_size) + 1;
-    // std::cout<<"requested_num_threads="<<requested_num_threads<<std::endl;
-    // std::cout<<"job_size="<<job_size<<std::endl;
-    // requested_num_threads =
-    //     requested_num_threads < 4 ? 4 : requested_num_threads;
-    // int requested_num_threads = 2;
     omp_set_num_threads(requested_num_threads);
     std::vector<std::vector<node_t>> thread_private_nodes(
         requested_num_threads);
@@ -389,7 +340,6 @@ sample(const at::Tensor& rowptr,
     if (!time.has_value()) {
 #pragma omp parallel num_threads(requested_num_threads)
 {
-  std::cout<<"numt="<<omp_get_num_threads()<<std::endl;
   int thread_counter = 0;
   #pragma omp for schedule(static, job_size) // , job_size
       for (int i = begin; i < end; ++i) {
@@ -415,44 +365,23 @@ sample(const at::Tensor& rowptr,
        // }
     // }
 
-    // for (int i=0; i<thread_private_nodes.size(); i++) {
-    //   std::cout<<"thread_private nodes[i]= "<<thread_private_nodes[i]<<std::endl;
-    // }
-
-    // post-parallel "cleanup"
     // for (int i = 0; i < thread_private_nodes.size(); ++i) {
     //   std::copy(thread_private_nodes[i].begin(), thread_private_nodes[i].end(),
     //             std::back_inserter(sampled_nodes));
     // }
 
-    // int reserve_size = sampled_nodes.size();
-    // for (int i = 0; i < thread_private_nodes.size(); ++i) {
-    //   reserve_size += thread_private_nodes[i].size();
-    // }
-    std::cout<<"thread_private_nodes0 size="<<thread_private_nodes[0].size()<<std::endl;
-    std::cout<<"thread_private_nodes1 size="<<thread_private_nodes[1].size()<<std::endl;
-    std::cout<<"thread_private_nodes2 size="<<thread_private_nodes[2].size()<<std::endl;
-    std::cout<<"thread_private_nodes3 size="<<thread_private_nodes[3].size()<<std::endl;
+    // vec.insert(vec.end(), vec2.begin(), vec2.end());
 
-    for (int64_t i = 0; i < thread_private_nodes.size(); ++i) {
-      for (int64_t j=0; j<thread_private_nodes[i].size(); j++) {
-        auto tmp = thread_private_nodes[i][j];
-        std::cout<<tmp<<std::endl;
-      }
-    }
-
-    // sampled_nodes.reserve(reserve_size);
-    for (int64_t i = 0; i < thread_private_nodes.size(); ++i) {
-      for (int64_t j=0; j<thread_private_nodes[i].size(); j++) {
-        std::cout<<"j="<<j<<std::endl;
-        std::cout<<"sampled_nodes size="<<sampled_nodes.size()<<std::endl;
-        // sampled_nodes.push_back(val);
+    for (auto i = 0; i < thread_private_nodes.size(); i++) {
+      // std::cout<<"size="<<thread_private_nodes[i].size()<<" ";
+      for (auto j=0; j<thread_private_nodes[i].size(); j++) {
+        // std::cout<<"j="<<j<<" ";
+        // sampled_nodes.insert(sampled_nodes.end(), thread_private_nodes[i].begin(), thread_private_nodes[i].end());
+        // std::cout<<sampled_nodes.size()<< " ";/
         sampled_nodes.push_back(thread_private_nodes[i][j]);
-        std::cout<<"sampled_nodes size="<<std::endl;
       }
     }
 
-    // std::cout<<"sampled_nodes="<<sampled_nodes<<std::endl;
     begin = end, end = sampled_nodes.size();
   }
 
