@@ -15,21 +15,18 @@ from torch_geometric.sampler.utils import to_csc
 
 argparser = argparse.ArgumentParser()
 argparser.add_argument('--batch-sizes', nargs='+', type=int, default=[
-    4,
-    512,
-    1024,
-    2048,
-    4096,
-    8192,
-])
-argparser.add_argument('--num_neighbors', type=ast.literal_eval, default=[
-    # [2, 2],
-    # [-1],
+    3,
     # 512,
     # 1024,
     # 2048,
     # 4096,
     # 8192,
+])
+argparser.add_argument('--num_neighbors', type=ast.literal_eval, default=[
+    [2, 2],
+    # [-1],
+    # [15, 10, 5],
+    # [20, 15, 10],
 ])
 
 argparser.add_argument('--replace', action='store_true')
@@ -48,7 +45,7 @@ num_nodes = 9
 @withSeed
 @withDataset('DIMACS10', 'citationCiteseer')
 def test_neighbor(dataset, **kwargs):
-    (rowptr, col), num_nodes = dataset, dataset[0].size(0) - 1
+    # (rowptr, col), num_nodes = dataset, dataset[0].size(0) - 1
     # dgl_graph = dgl.graph(('csc', (rowptr, col, torch.arange(col.size(0)))))
 
     out = to_csc(data, device='cpu', share_memory=False,

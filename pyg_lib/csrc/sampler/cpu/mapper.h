@@ -12,14 +12,6 @@ namespace sampler {
 // implementations as well.
 template <typename node_t, typename scalar_t>
 class Mapper {
-  // struct lock_guard {
-  //   lock_guard(omp_lock_t* lock_ptr) : lock_ptr_(lock_ptr) {
-  //     omp_set_lock(lock_ptr_);
-  //   };
-  //   ~lock_guard() { omp_unset_lock(lock_ptr_); }
-
-  //   omp_lock_t* lock_ptr_;
-  // };
 
  public:
   Mapper(const size_t num_nodes, const size_t num_entries = -1)
@@ -44,13 +36,9 @@ class Mapper {
       to_local_vec.resize(num_nodes, -1);
     }
 
-    // omp_init_lock(&lock_);
   }
 
-  // ~Mapper() { omp_destroy_lock(&lock_); }
-
   std::pair<scalar_t, bool> insert(const node_t& node) {
-    // lock_guard g(&lock_);
     std::pair<scalar_t, bool> res;
     if (use_vec) {
       if constexpr (std::is_scalar<node_t>::value) {
@@ -80,7 +68,6 @@ class Mapper {
   }
 
   bool exists(const node_t& node) {
-    // lock_guard g(&lock_);
     if (use_vec) {
       return to_local_vec[node] >= 0;
     } else {
@@ -89,7 +76,6 @@ class Mapper {
   }
 
   scalar_t map(const node_t& node) {
-    // lock_guard g(&lock_);
     if (use_vec) {
       return to_local_vec[node];
     } else {
@@ -105,8 +91,6 @@ class Mapper {
   bool use_vec;
   std::vector<scalar_t> to_local_vec;
   phmap::flat_hash_map<node_t, scalar_t> to_local_map;
-
-  omp_lock_t lock_;
 };
 
 }  // namespace sampler

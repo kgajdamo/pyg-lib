@@ -42,7 +42,8 @@ class NeighborSampler {
                           size_t begin,
                           size_t end,
                           int64_t count,
-                          int num_threads) {
+                          int num_threads,
+                          std::vector<std::tuple<int, int>>& threads_ranges) {
     if (!save_edges)
       return;
     sampled_id_offset_ = sampled_rows_.size();
@@ -55,12 +56,10 @@ class NeighborSampler {
       }
     }
 
-    auto job_size = (end - begin) / num_threads + 1;
     threads_offsets_.resize(num_threads);
 
     for (int tid=1; tid<num_threads; tid++) {
-      auto prev_thread_begin = (tid - 1) * job_size;
-      scalar_t allocation_size = get_allocation_size_(global_src_nodes, prev_thread_begin, prev_thread_begin + job_size, count);
+      scalar_t allocation_size = get_allocation_size_(global_src_nodes, std::get<0>(threads_ranges[tid-1]), std::get<1>(threads_ranges[tid-1]), count);
       threads_offsets_[tid] = threads_offsets_[tid - 1] + allocation_size;
     }
   }
@@ -116,16 +115,25 @@ class NeighborSampler {
   get_sampled_edges(bool csc = false) {
     TORCH_CHECK(save_edges, "No edges have been stored")
     std::cout<<"sampled_rows_="<<sampled_rows_<<std::endl;
+    std::cout<<"sampled_cols_="<<sampled_cols_<<std::endl;
     const auto row = pyg::utils::from_vector(sampled_rows_);
     const auto col = pyg::utils::from_vector(sampled_cols_);
     c10::optional<at::Tensor> edge_id = c10::nullopt;
     if (save_edge_ids) {
+      std::cout<<"sampled_edge_ids_="<<sampled_edge_ids_<<std::endl;
       edge_id = pyg::utils::from_vector(sampled_edge_ids_);
     }
     if (!csc) {
       return std::make_tuple(row, col, edge_id);
     } else {
       return std::make_tuple(col, row, edge_id);
+    }
+  }
+
+  void update_sampled_cols() {
+    int counter = 0;
+    for (int i=sampled_id_offset_; i<sampled_cols_.size(); i++) {
+
     }
   }
 
@@ -223,9 +231,9 @@ class NeighborSampler {
         to_node_t(global_dst_node_value, global_src_node);
     // TODO: consider using exists + map + insert
     const auto res = dst_mapper.insert(global_dst_node);
-    // if (res.second) {
+    if (res.second) {
       out_global_dst_nodes.push_back(global_dst_node);
-    // }
+    }
     if (save_edges) {
       sampled_rows_[sampled_id_offset_ + threads_offsets_[thread_id] + thread_counter] = local_src_node;
 
@@ -303,34 +311,36 @@ sample(const at::Tensor& rowptr,
       sampled_nodes.push_back({i, seed_data[i]});
       mappers[i].insert({i, seed_data[i]});
     }
-    if (seed_time.has_value()) {
-      const auto seed_time_data = seed_time.value().data_ptr<scalar_t>();
-      for (size_t i = 0; i < seed.numel(); ++i) {
-        seed_times.push_back(seed_time_data[i]);
-      }
-    } else if (time.has_value()) {
-      const auto time_data = time.value().data_ptr<scalar_t>();
-      for (size_t i = 0; i < seed.numel(); ++i) {
-        seed_times.push_back(time_data[seed_data[i]]);
-      }
-    }
+    // if (seed_time.has_value()) {
+    //   const auto seed_time_data = seed_time.value().data_ptr<scalar_t>();
+    //   for (size_t i = 0; i < seed.numel(); ++i) {
+    //     seed_times.push_back(seed_time_data[i]);
+    //   }
+    // } else if (time.has_value()) {
+    //   const auto time_data = time.value().data_ptr<scalar_t>();
+    //   for (size_t i = 0; i < seed.numel(); ++i) {
+    //     seed_times.push_back(time_data[seed_data[i]]);
+    //   }
+    // }
+  }
+
+  int requested_num_threads = seed.size(0);//seed.size(0); // at the moment
+
+  std::vector<std::tuple<int, int>> threads_ranges(requested_num_threads);
+  int offset = 0;
+  int seeds_per_thread = seed.size(0) / requested_num_threads; // handle case when % != 0
+  for (int tid=0; tid < requested_num_threads; tid++) {
+    std::get<0>(threads_ranges[tid]) = offset;
+    offset += seeds_per_thread;
+    std::get<1>(threads_ranges[tid]) = offset;
   }
 
   size_t begin = 0, end = seed.size(0);
   for (size_t ell = 0; ell < num_neighbors.size(); ++ell) {
     const auto count = num_neighbors[ell];
 
-    int size = end - begin; // chunk
-    
-
-    int requested_num_threads = 2;
-
     // preparation for going parallel
-    sampler.allocate_resources(sampled_nodes, begin, end, count, requested_num_threads);
-    // fixed threads number just for experiment
-
-    int job_size = size / requested_num_threads + 1;
-    std::cout<<"job_size"<<job_size<<std::endl;
+    sampler.allocate_resources(sampled_nodes, begin, end, count, requested_num_threads, threads_ranges);
 
     omp_set_num_threads(requested_num_threads);
     std::vector<std::vector<node_t>> thread_private_nodes(
@@ -341,51 +351,49 @@ sample(const at::Tensor& rowptr,
 #pragma omp parallel num_threads(requested_num_threads)
 {
   int thread_counter = 0;
-  #pragma omp for schedule(static, job_size) // , job_size
-      for (int i = begin; i < end; ++i) {
-        int thread_id = omp_get_thread_num();
-        if constexpr (!std::is_scalar<node_t>::value) {
-          mapper_id = std::get<0>(sampled_nodes[i]);
-        }
-        sampler.uniform_sample(
-            /*global_src_node=*/sampled_nodes[i],
-            /*local_src_node=*/i, count, mappers[mapper_id], generator,
-            /*out_global_dst_nodes=*/thread_private_nodes[thread_id], thread_id, thread_counter);
-      }
+  int thread_id = omp_get_thread_num();
+
+  for (auto i = std::get<0>(threads_ranges[thread_id]); i < std::get<1>(threads_ranges[thread_id]); i++) {
+    if constexpr (!std::is_scalar<node_t>::value) {
+      mapper_id = std::get<0>(sampled_nodes[i]);
+    }
+    sampler.uniform_sample(
+      /*global_src_node=*/sampled_nodes[i],
+      /*local_src_node=*/i, count, mappers[mapper_id], generator,
+      /*out_global_dst_nodes=*/thread_private_nodes[thread_id], thread_id, thread_counter);
+  }
 }
-    }  // else if constexpr (!std::is_scalar<node_t>::value) {  // Temporal:
-       // const auto time_data = time.value().data_ptr<scalar_t>();
-       // for (size_t i = begin; i < end; ++i) {
-       //   const auto batch_idx = sampled_nodes[i].first;
-       //   sampler.temporal_sample(
-       //       /*global_src_node=*/sampled_nodes[i],
-       //       /*local_src_node=*/i, count, seed_times[batch_idx], time_data,
-       //       mapper, generator,
-       //       /*out_global_dst_nodes=*/thread_private_nodes[thread_id]);
-       // }
-    // }
-
-    // for (int i = 0; i < thread_private_nodes.size(); ++i) {
-    //   std::copy(thread_private_nodes[i].begin(), thread_private_nodes[i].end(),
-    //             std::back_inserter(sampled_nodes));
-    // }
-
-    // vec.insert(vec.end(), vec2.begin(), vec2.end());
-
-    for (auto i = 0; i < thread_private_nodes.size(); i++) {
-      // std::cout<<"size="<<thread_private_nodes[i].size()<<" ";
-      for (auto j=0; j<thread_private_nodes[i].size(); j++) {
-        // std::cout<<"j="<<j<<" ";
-        // sampled_nodes.insert(sampled_nodes.end(), thread_private_nodes[i].begin(), thread_private_nodes[i].end());
-        // std::cout<<sampled_nodes.size()<< " ";/
-        sampled_nodes.push_back(thread_private_nodes[i][j]);
-      }
     }
 
+    sampler.update_sampled_cols();
+
+    for (int i = 0; i < thread_private_nodes.size(); ++i) {
+      std::copy(thread_private_nodes[i].begin(), thread_private_nodes[i].end(),
+                std::back_inserter(sampled_nodes));
+    }
+
+    // for (auto i = 0; i < thread_private_nodes.size(); i++) {
+    //   // std::cout<<"size="<<thread_private_nodes[i].size()<<" ";
+    //   for (auto j=0; j<thread_private_nodes[i].size(); j++) {
+    //     // std::cout<<"j="<<j<<" ";
+    //     // sampled_nodes.insert(sampled_nodes.end(), thread_private_nodes[i].begin(), thread_private_nodes[i].end());
+    //     // std::cout<<sampled_nodes.size()<< " ";/
+    //     sampled_nodes.push_back(thread_private_nodes[i][j]);
+    //   }
+    // }
+
     begin = end, end = sampled_nodes.size();
+
+    std::get<0>(threads_ranges[0]) = begin;
+    std::get<1>(threads_ranges[0]) = begin + thread_private_nodes[0].size();
+    for (int tid=1; tid < threads_ranges.size(); tid++) {
+      std::get<0>(threads_ranges[tid]) = std::get<1>(threads_ranges[tid-1]);
+      std::get<1>(threads_ranges[tid]) = std::get<0>(threads_ranges[tid]) + thread_private_nodes[tid].size();
+    }
   }
 
   out_node_id = pyg::utils::from_vector(sampled_nodes);
+  std::cout<<"sampled_nodes="<<sampled_nodes<<std::endl;
 
   TORCH_CHECK(directed, "Undirected subgraphs not yet supported");
   if (directed) {
