@@ -43,7 +43,7 @@ class NeighborSampler {
                           size_t end,
                           int64_t count,
                           int num_threads,
-                          std::vector<std::tuple<int, int>>& threads_ranges) {
+                          std::vector<int>& threads_ranges) {
     if (!save_edges)
       return;
     sampled_id_offset_ = sampled_rows_.size();
@@ -59,7 +59,7 @@ class NeighborSampler {
     threads_offsets_.resize(num_threads + 1);
 
     for (int tid=1; tid< threads_offsets_.size(); tid++) {
-      scalar_t allocation_size = get_allocation_size_(global_src_nodes, std::get<0>(threads_ranges[tid-1]), std::get<1>(threads_ranges[tid-1]), count);
+      scalar_t allocation_size = get_allocation_size_(global_src_nodes, threads_ranges[tid-1], threads_ranges[tid], count);
       threads_offsets_[tid] = threads_offsets_[tid - 1] + allocation_size;
     }
     // std::cout<<"threads_offsets="<<threads_offsets_<<std::endl;
@@ -194,7 +194,7 @@ void update_sampled_cols(std::vector<Mapper<node_t, scalar_t>>& mappers) {
     // auto end = begin;
     // std::cout<<"sampled_rows="<<sampled_rows_<<std::endl;
     // std::cout<<"sampled_cols_before="<<sampled_cols_<<std::endl;
-    for (int m = 0; m<mappers.size(); m++) { // mapper = 0
+    for (int m = 0; m<mappers.size(); m++) {
       int idx = 0;
       for (int i=0; i <mappers[m].sampled_map.size(); i++) { // sampled_map = {1, 3}
         for (idx; idx<std::get<1>(mappers[m].sampled_map[i]); idx++) { // {0, 1}
@@ -310,11 +310,12 @@ void update_sampled_cols(std::vector<Mapper<node_t, scalar_t>>& mappers) {
     const auto global_dst_node_value = col_[edge_id];
     const auto global_dst_node =
         to_node_t(global_dst_node_value, global_src_node);
+    // std::cout<<"add func"<<std::endl;
     // TODO: consider using exists + map + insert
     const auto res = dst_mapper.insert(global_dst_node);
-    if (res.second) {
+    // if (res.second) {
       out_global_dst_nodes.push_back(global_dst_node);
-    }
+    // }
     if (save_edges) {
       sampled_rows_[sampled_id_offset_ + threads_offsets_[thread_id] + thread_counter] = local_src_node;
 
@@ -416,16 +417,14 @@ sample(const at::Tensor& rowptr,
     // }
   }
 
-  int requested_num_threads = 16; //seed.size(0); // at the moment
+  int requested_num_threads = 16;//seed.size(0); // at the moment
 
-  std::vector<std::tuple<int, int>> threads_ranges(requested_num_threads);
-  int offset = 0;
+  std::vector<int> threads_ranges(requested_num_threads+1);
   int seeds_per_thread = seed.size(0) / requested_num_threads; // handle case when % != 0
-  for (int tid=0; tid < requested_num_threads; tid++) {
-    std::get<0>(threads_ranges[tid]) = offset;
-    offset += seeds_per_thread;
-    std::get<1>(threads_ranges[tid]) = offset;
+  for (int tid=0; tid <= requested_num_threads; tid++) {
+    threads_ranges[tid] = tid * seeds_per_thread;
   }
+  // std::cout<<"threads_ranges="<<threads_ranges<<std::endl;
 
   size_t begin = 0, end = seed.size(0);
   for (size_t ell = 0; ell < num_neighbors.size(); ++ell) {
@@ -445,7 +444,8 @@ sample(const at::Tensor& rowptr,
   int thread_counter = 0;
   int thread_id = omp_get_thread_num();
 
-  for (auto i = std::get<0>(threads_ranges[thread_id]); i < std::get<1>(threads_ranges[thread_id]); i++) {
+#pragma omp for schedule(static, seeds_per_thread)
+  for (auto i = threads_ranges[thread_id]; i < threads_ranges[thread_id + 1]; i++) {
     if constexpr (!std::is_scalar<node_t>::value) {
       mapper_id = std::get<0>(sampled_nodes[i]);
     }
@@ -469,26 +469,21 @@ for (auto mapper_id = 0; mapper_id < mappers.size(); mapper_id++) {
   mappers[mapper_id].update_local_val(sampled_nodes.size(), sampled_num_by_prev_mappers, mapper_id);
 }
 
-    // std::cout<<"sampled_nodes="<<sampled_nodes<<std::endl;
     sampler.update_sampled_cols(mappers);
 
     for (int i = 0; i < thread_private_nodes.size(); ++i) {
       std::copy(thread_private_nodes[i].begin(), thread_private_nodes[i].end(),
                 std::back_inserter(sampled_nodes));
     }
-    // std::cout<<"sampled_nodes:"<<std::endl;
-    //   for (int i=0; i < sampled_nodes.size(); i++) {
-    //     std::cout<<sampled_nodes[i]<<" ";
-    //   }
-    //   std::cout<<std::endl;
 
     begin = end, end = sampled_nodes.size();
 
-    std::get<0>(threads_ranges[0]) = begin;
-    std::get<1>(threads_ranges[0]) = begin + thread_private_nodes[0].size();
-    for (int tid=1; tid < threads_ranges.size(); tid++) {
-      std::get<0>(threads_ranges[tid]) = std::get<1>(threads_ranges[tid-1]);
-      std::get<1>(threads_ranges[tid]) = std::get<0>(threads_ranges[tid]) + thread_private_nodes[tid].size();
+    threads_ranges[0] = begin;
+    // threads_ranges[1] = begin + thread_private_nodes[0].size();
+    for (int tid=1; tid <= threads_ranges.size(); tid++) {
+      threads_ranges[tid] = threads_ranges[tid-1] + thread_private_nodes[tid-1].size();
+      // std::get<0>(threads_ranges[tid]) = std::get<1>(threads_ranges[tid-1]);
+      // std::get<1>(threads_ranges[tid]) = std::get<0>(threads_ranges[tid]) + thread_private_nodes[tid].size();
     }
   }
 

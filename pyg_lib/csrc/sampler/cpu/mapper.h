@@ -48,6 +48,7 @@ class Mapper {
           to_local_vec[node] = curr;
       }
     } else {
+      // std::cout<<"here"<<std::endl;
       auto out = to_local_map.insert({node, curr});
       res = std::pair<scalar_t, bool>(out.first->second, out.second);
     }
