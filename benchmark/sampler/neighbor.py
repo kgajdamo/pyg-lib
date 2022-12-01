@@ -15,17 +15,17 @@ from torch_geometric.sampler.utils import to_csc
 
 argparser = argparse.ArgumentParser()
 argparser.add_argument('--batch-sizes', nargs='+', type=int, default=[
-    3,
-    # 512,
+    # 3,
+    512,
     # 1024,
     # 2048,
     # 4096,
     # 8192,
 ])
 argparser.add_argument('--num_neighbors', type=ast.literal_eval, default=[
-    [2, 2],
+    # [2, 2],
     # [-1],
-    # [15, 10, 5],
+    [15, 10, 5],
     # [20, 15, 10],
 ])
 
@@ -45,12 +45,12 @@ num_nodes = 9
 @withSeed
 @withDataset('DIMACS10', 'citationCiteseer')
 def test_neighbor(dataset, **kwargs):
-    # (rowptr, col), num_nodes = dataset, dataset[0].size(0) - 1
+    (rowptr, col), num_nodes = dataset, dataset[0].size(0) - 1
     # dgl_graph = dgl.graph(('csc', (rowptr, col, torch.arange(col.size(0)))))
 
-    out = to_csc(data, device='cpu', share_memory=False,
-                         is_sorted=False, src_node_time=None)
-    rowptr, col, _ = out
+    # out = to_csc(data, device='cpu', share_memory=False,
+    #                      is_sorted=False, src_node_time=None)
+    # rowptr, col, _ = out
 
     if args.shuffle:
         node_perm = torch.randperm(num_nodes)
@@ -73,7 +73,7 @@ def test_neighbor(dataset, **kwargs):
                     return_edge_id=True,
                 )
             pyg_lib_duration = time.perf_counter() - t
-
+            
             # t = time.perf_counter()
             # for seed in tqdm(node_perm.split(batch_size)):
             #     torch.ops.torch_sparse.neighbor_sample(

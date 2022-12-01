@@ -52,8 +52,14 @@ class Mapper {
       res = std::pair<scalar_t, bool>(out.first->second, out.second);
     }
     if (res.second) {
-      curr++;
+      ++curr;
+      // uncomment below 3 lines
+      ++curr_in_layer;
+    } else {
+      sampled_map.push_back(std::make_tuple(node, sampled_num));
     }
+    // uncomment below 1 line
+    ++sampled_num;
     return res;
   }
 
@@ -77,20 +83,40 @@ class Mapper {
 
   scalar_t map(const node_t& node) {
     if (use_vec) {
-      return to_local_vec[node];
+      if constexpr (std::is_scalar<node_t>::value) {
+        return to_local_vec[node];
+      }
     } else {
       const auto search = to_local_map.find(node);
       return search != to_local_map.end() ? search->second : -1;
     }
   }
 
+  // uncomment below function
+  void update_local_val(size_t sampled_nodes_size, int sampled_num_by_prev_mappers, int mapper_id) {
+    // iterate over local ids of nodes
+    for (int i = curr - 1; i>=curr-curr_in_layer; i--) {
+      auto it = std::find_if(to_local_map.begin(), to_local_map.end(),
+                           [i](auto&& p) { return p.second == i; });
+      if (it == to_local_map.end())
+          return; // raise an error?
+      
+      it->second += sampled_nodes_size - curr + curr_in_layer + sampled_num_by_prev_mappers;
+    }
+  }
+
  private:
   const size_t num_nodes, num_entries;
-  scalar_t curr = 0;
 
   bool use_vec;
   std::vector<scalar_t> to_local_vec;
-  phmap::flat_hash_map<node_t, scalar_t> to_local_map;
+  
+public:
+scalar_t curr = 0;
+scalar_t curr_in_layer = 0;
+phmap::flat_hash_map<node_t, scalar_t> to_local_map;
+  std::vector<std::tuple<node_t, int>> sampled_map;
+  int sampled_num = 0;
 };
 
 }  // namespace sampler
