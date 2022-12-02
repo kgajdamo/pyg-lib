@@ -72,10 +72,16 @@ class NeighborSampler {
                       pyg::random::RandintEngine<scalar_t>& generator,
                       std::vector<node_t>& out_global_dst_nodes,
                       int& thread_id,
-                      int& thread_counter) {
+                      int& thread_counter,
+                      int& mapper_id) {
     const auto row_start = rowptr_[to_scalar_t(global_src_node)];
     const auto row_end = rowptr_[to_scalar_t(global_src_node) + 1];
 
+    if constexpr (!std::is_scalar<node_t>::value) {
+      std::string print_it = "mapper_id="+std::to_string(mapper_id)+", global_src_node.first="+std::to_string(global_src_node.first)+", global_src_node.second="+std::to_string(global_src_node.second)+"\n";
+      std::cout<<print_it;
+    }
+    
     _sample(global_src_node, local_src_node, row_start, row_end, count,
             dst_mapper, generator, out_global_dst_nodes, thread_id, thread_counter);
   }
@@ -115,8 +121,8 @@ class NeighborSampler {
   std::tuple<at::Tensor, at::Tensor, c10::optional<at::Tensor>>
   get_sampled_edges(bool csc = false) {
     TORCH_CHECK(save_edges, "No edges have been stored")
-  //   // std::cout<<"sampled_rows_="<<sampled_rows_<<std::endl;
-  //   std::cout<<"sampled_cols_="<<std::endl;
+    std::cout<<"sampled_rows_="<<sampled_rows_<<std::endl;
+    std::cout<<"sampled_cols_="<<std::endl;
   //   for (int i =0; i < sampled_cols_.size(); i++) {
   //   std::cout<<sampled_cols_[i]<<" ";
   // }
@@ -124,7 +130,7 @@ class NeighborSampler {
     const auto col = pyg::utils::from_vector(sampled_cols_);
     c10::optional<at::Tensor> edge_id = c10::nullopt;
     if (save_edge_ids) {
-      // std::cout<<"sampled_edge_ids_="<<sampled_edge_ids_<<std::endl;
+      std::cout<<"sampled_edge_ids_="<<sampled_edge_ids_<<std::endl;
       edge_id = pyg::utils::from_vector(sampled_edge_ids_);
     }
     if (!csc) {
@@ -198,6 +204,11 @@ void update_sampled_cols(std::vector<Mapper<node_t, scalar_t>>& mappers) {
     // std::cout<<"sampled_rows="<<sampled_rows_<<std::endl;
     // std::cout<<"sampled_cols_before="<<sampled_cols_<<std::endl;
     for (int m = 0; m<mappers.size(); m++) {
+      std::cout<<"new_mapper"<<std::endl;
+      for (auto x: mappers[m].to_local_map) {
+        std::cout<<x.first<<" "<<x.second;
+      }
+      std::cout<<std::endl;
       int idx = 0;
       for (int i=0; i <mappers[m].sampled_map.size(); i++) { // sampled_map = {1, 3}
         for (idx; idx<std::get<1>(mappers[m].sampled_map[i]); idx++) { // {0, 1}
@@ -407,6 +418,16 @@ sample(const at::Tensor& rowptr,
       mappers[i].sampled_num = 0;
       mappers[i].curr_in_layer = 0;
     }
+
+    for (int m=0; m<mappers.size(); m++) {
+    std::cout<<"new_mapper"<<std::endl;
+      for (auto x: mappers[m].to_local_map) {
+        std::cout<<x.first<<" "<<x.second;
+      }
+      std::cout<<std::endl;
+    }
+    std::cout<<"done printing mappers 0"<<std::endl;
+
     // if (seed_time.has_value()) {
     //   const auto seed_time_data = seed_time.value().data_ptr<scalar_t>();
     //   for (size_t i = 0; i < seed.numel(); ++i) {
@@ -420,14 +441,15 @@ sample(const at::Tensor& rowptr,
     // }
   }
 
-  int requested_num_threads = 16;//seed.size(0); // at the moment
+  int requested_num_threads = 2;//seed.size(0); // at the moment
 
   std::vector<int> threads_ranges(requested_num_threads+1);
   int seeds_per_thread = seed.size(0) / requested_num_threads; // handle case when % != 0
   for (int tid=0; tid <= requested_num_threads; tid++) {
     threads_ranges[tid] = tid * seeds_per_thread;
   }
-  // std::cout<<"threads_ranges="<<threads_ranges<<std::endl;
+  std::cout<<"threads_ranges="<<threads_ranges<<std::endl;
+  std::cout<<"sampled_nodes="<<sampled_nodes<<std::endl;
 
   size_t begin = 0, end = seed.size(0);
   for (size_t ell = 0; ell < num_neighbors.size(); ++ell) {
@@ -442,24 +464,34 @@ sample(const at::Tensor& rowptr,
 
     int mapper_id = 0;
     if (!time.has_value()) {
-#pragma omp parallel num_threads(requested_num_threads)
+#pragma omp parallel num_threads(requested_num_threads) private(mapper_id)
 {
   int thread_counter = 0;
-  int thread_id = omp_get_thread_num();
+  int thread_id = omp_get_thread_num(); // thread_id = 0
 
-// #pragma omp for schedule(static, seeds_per_thread)
-  for (auto i = threads_ranges[thread_id]; i < threads_ranges[thread_id + 1]; i++) {
+  for (auto i = threads_ranges[thread_id]; i < threads_ranges[thread_id + 1]; i++) { // thread_id=0: 0<=i<2) thread_id=1: 2<=i<4
     if constexpr (!std::is_scalar<node_t>::value) {
-      mapper_id = std::get<0>(sampled_nodes[i]);
+      mapper_id = std::get<0>(sampled_nodes[i]); // i=0: mapper_id=0; i=1: mapper_id=1; i=2: mapper_id=2; i=3: mapper_id=3
+      std::string print_it = "thread_id="+std::to_string(thread_id)+" i="+std::to_string(i)+" mapper_id="+std::to_string(mapper_id)+"\n";
+      std::cout<<print_it;
     }
     sampler.uniform_sample(
       /*global_src_node=*/sampled_nodes[i],
       /*local_src_node=*/i, count, mappers[mapper_id], generator,
-      /*out_global_dst_nodes=*/thread_private_nodes[thread_id], thread_id, thread_counter);
+      /*out_global_dst_nodes=*/thread_private_nodes[thread_id], thread_id, thread_counter, mapper_id);
   }
 }
-    }
+std::cout<<"done"<<std::endl;
 
+for (int m=0; m<mappers.size(); m++) {
+  std::cout<<"new_mapper"<<std::endl;
+      for (auto x: mappers[m].to_local_map) {
+        std::cout<<x.first<<" "<<x.second;
+      }
+      std::cout<<std::endl;
+    }
+}
+std::cout<<"done printing mappers"<<std::endl;
 
 // update local_map values
 #pragma omp parallel for num_threads(requested_num_threads)
@@ -491,6 +523,7 @@ for (auto mapper_id = 0; mapper_id < mappers.size(); mapper_id++) {
   }
 
   out_node_id = pyg::utils::from_vector(sampled_nodes);
+  std::cout<<"sampled_nodes="<<sampled_nodes<<std::endl;
 
   TORCH_CHECK(directed, "Undirected subgraphs not yet supported");
   if (directed) {

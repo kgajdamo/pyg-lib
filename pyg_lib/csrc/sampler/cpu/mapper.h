@@ -48,7 +48,6 @@ class Mapper {
           to_local_vec[node] = curr;
       }
     } else {
-      // std::cout<<"here"<<std::endl;
       auto out = to_local_map.insert({node, curr});
       res = std::pair<scalar_t, bool>(out.first->second, out.second);
     }
@@ -116,8 +115,8 @@ public:
 scalar_t curr = 0;
 scalar_t curr_in_layer = 0;
 phmap::flat_hash_map<node_t, scalar_t> to_local_map;
-  std::vector<std::tuple<node_t, int>> sampled_map;
-  int sampled_num = 0;
+std::vector<std::tuple<node_t, int>> sampled_map;
+int sampled_num = 0;
 };
 
 }  // namespace sampler
