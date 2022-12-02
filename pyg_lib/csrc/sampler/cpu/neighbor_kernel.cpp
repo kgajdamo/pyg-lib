@@ -115,8 +115,11 @@ class NeighborSampler {
   std::tuple<at::Tensor, at::Tensor, c10::optional<at::Tensor>>
   get_sampled_edges(bool csc = false) {
     TORCH_CHECK(save_edges, "No edges have been stored")
-    // std::cout<<"sampled_rows_="<<sampled_rows_<<std::endl;
-    // std::cout<<"sampled_cols_="<<sampled_cols_<<std::endl;
+  //   // std::cout<<"sampled_rows_="<<sampled_rows_<<std::endl;
+  //   std::cout<<"sampled_cols_="<<std::endl;
+  //   for (int i =0; i < sampled_cols_.size(); i++) {
+  //   std::cout<<sampled_cols_[i]<<" ";
+  // }
     const auto row = pyg::utils::from_vector(sampled_rows_);
     const auto col = pyg::utils::from_vector(sampled_cols_);
     c10::optional<at::Tensor> edge_id = c10::nullopt;
@@ -444,7 +447,7 @@ sample(const at::Tensor& rowptr,
   int thread_counter = 0;
   int thread_id = omp_get_thread_num();
 
-#pragma omp for schedule(static, seeds_per_thread)
+// #pragma omp for schedule(static, seeds_per_thread)
   for (auto i = threads_ranges[thread_id]; i < threads_ranges[thread_id + 1]; i++) {
     if constexpr (!std::is_scalar<node_t>::value) {
       mapper_id = std::get<0>(sampled_nodes[i]);
@@ -488,7 +491,6 @@ for (auto mapper_id = 0; mapper_id < mappers.size(); mapper_id++) {
   }
 
   out_node_id = pyg::utils::from_vector(sampled_nodes);
-  // std::cout<<"sampled_nodes="<<sampled_nodes<<std::endl;
 
   TORCH_CHECK(directed, "Undirected subgraphs not yet supported");
   if (directed) {
