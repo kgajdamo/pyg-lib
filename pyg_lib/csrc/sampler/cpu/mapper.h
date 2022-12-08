@@ -3,6 +3,7 @@
 #include <ATen/ATen.h>
 #include <omp.h>
 
+#include "parallel_hashmap/btree.h"
 #include "parallel_hashmap/phmap.h"
 
 namespace pyg {
@@ -55,7 +56,8 @@ class Mapper {
       ++curr;
       ++curr_in_layer;
     } else {
-      resampled_map.push_back(std::make_tuple(node, sampled_num));
+      // resampled_map.push_back(std::make_tuple(node, sampled_num));
+      resampled_btree_map.insert({sampled_num, node});
     }
     ++sampled_num;
     return res;
@@ -112,7 +114,7 @@ public:
 scalar_t curr = 0;
 scalar_t curr_in_layer = 0;
 phmap::flat_hash_map<node_t, scalar_t> to_local_map;
-std::vector<std::tuple<node_t, int>> resampled_map;
+phmap::btree_map<int, node_t> resampled_btree_map;
 int sampled_num = 0;
 };
 

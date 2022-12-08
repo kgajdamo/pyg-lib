@@ -133,19 +133,22 @@ class NeighborSampler {
     }
   }
 
-void fill_sampled_cols(Mapper<node_t, scalar_t>& mapper, const int thread_id, const int mapper_id, int &thread_counter, int &curr, std::vector<int>& max_currs) {
-    for (int i=0; i <mapper.resampled_map.size(); i++) {
-      for (thread_counter; thread_counter < std::get<1>(mapper.resampled_map[i]); thread_counter++) { 
+void fill_sampled_cols(Mapper<node_t, scalar_t>& mapper, const int thread_id, const int mapper_id, int &thread_counter, int &curr, std::vector<int>& max_currs, int& sampled_num_thread) {
+    for (const auto &resampled : mapper.resampled_btree_map) {
+    // for (int i=0; i <mapper.resampled_map.size(); i++) {
+      for (thread_counter; thread_counter < resampled.first; thread_counter++) { 
         sampled_cols_[sampled_id_offset_ + threads_offsets_[thread_id] + thread_counter] = curr;
         ++curr;
       }
-      auto node_to_map = std::get<0>(mapper.resampled_map[i]);
+      auto node_to_map = resampled.second;
       int local_node_id = mapper.map(node_to_map);
       sampled_cols_[sampled_id_offset_ + threads_offsets_[thread_id] + thread_counter] = local_node_id;
       ++thread_counter;
     }
-    for (thread_counter; thread_counter<mapper.sampled_num; thread_counter++) {
-      sampled_cols_[sampled_id_offset_ + threads_offsets_[thread_id] + thread_counter] = curr;
+    // }
+    sampled_num_thread += mapper.sampled_num;
+    for (thread_counter; thread_counter<sampled_num_thread; thread_counter++) { // {0, 1}
+      sampled_cols_[sampled_id_offset_ + threads_offsets_[thread_id] + thread_counter] = curr; // [0+0+0], [0+0+1]
       ++curr;
       if (curr > max_currs[mapper_id]) {
         max_currs[mapper_id] = curr;
@@ -153,41 +156,41 @@ void fill_sampled_cols(Mapper<node_t, scalar_t>& mapper, const int thread_id, co
     }
     mapper.sampled_num = 0;
     mapper.curr_in_layer = 0;
-    mapper.resampled_map.clear();
+    mapper.resampled_btree_map.clear();
 }
 
-void fill_sampled_cols_seq(std::vector<Mapper<node_t, scalar_t>>& mappers) {
-    // auto begin = sampled_cols_.begin() + sampled_id_offset_; // 7 element
-    // std::cout<<"sampled_id_offset_="<<sampled_id_offset_<<std::endl;
-    // auto end = begin;
-    // std::cout<<"sampled_rows="<<sampled_rows_<<std::endl;
-    // std::cout<<"sampled_cols_before="<<sampled_cols_<<std::endl;
-    for (int m = 0; m<mappers.size(); m++) {
-      // std::cout<<"resampled map:"<<std::endl;
-      // for (auto x: mappers[m].resampled_map) {
-      //   std::cout<<std::get<0>(x)<<" "<<std::get<1>(x);
-      // }
-      // std::cout<<std::endl;
-      int idx = 0;
-      for (int i=0; i <mappers[m].resampled_map.size(); i++) {
-        for (idx; idx<std::get<1>(mappers[m].resampled_map[i]); idx++) {
-          sampled_cols_.push_back(curr);
-          ++curr;
-        }
-        auto node_to_map = std::get<0>(mappers[m].resampled_map[i]);
-        int local_node_id = mappers[m].map(node_to_map);
-        sampled_cols_.push_back(local_node_id);
-        ++idx;
-      }
-      for (idx; idx<mappers[m].sampled_num; idx++) {
-        sampled_cols_.push_back(curr);
-        ++curr;
-      }
-      mappers[m].sampled_num = 0;
-      mappers[m].curr_in_layer = 0;
-      mappers[m].resampled_map.clear();
-    }
-  }
+// void fill_sampled_cols_seq(std::vector<Mapper<node_t, scalar_t>>& mappers) {
+//     // auto begin = sampled_cols_.begin() + sampled_id_offset_; // 7 element
+//     // std::cout<<"sampled_id_offset_="<<sampled_id_offset_<<std::endl;
+//     // auto end = begin;
+//     // std::cout<<"sampled_rows="<<sampled_rows_<<std::endl;
+//     // std::cout<<"sampled_cols_before="<<sampled_cols_<<std::endl;
+//     for (int m = 0; m<mappers.size(); m++) {
+//       // std::cout<<"resampled map:"<<std::endl;
+//       // for (auto x: mappers[m].resampled_map) {
+//       //   std::cout<<std::get<0>(x)<<" "<<std::get<1>(x);
+//       // }
+//       // std::cout<<std::endl;
+//       int idx = 0;
+//       for (int i=0; i <mappers[m].resampled_map.size(); i++) {
+//         for (idx; idx<std::get<1>(mappers[m].resampled_map[i]); idx++) {
+//           sampled_cols_.push_back(curr);
+//           ++curr;
+//         }
+//         auto node_to_map = std::get<0>(mappers[m].resampled_map[i]);
+//         int local_node_id = mappers[m].map(node_to_map);
+//         sampled_cols_.push_back(local_node_id);
+//         ++idx;
+//       }
+//       for (idx; idx<mappers[m].sampled_num; idx++) {
+//         sampled_cols_.push_back(curr);
+//         ++curr;
+//       }
+//       mappers[m].sampled_num = 0;
+//       mappers[m].curr_in_layer = 0;
+//       mappers[m].resampled_map.clear();
+//     }
+//   }
 
  private:
   // only for uniform case
@@ -302,8 +305,8 @@ void fill_sampled_cols_seq(std::vector<Mapper<node_t, scalar_t>>& mappers) {
   const scalar_t* rowptr_;
   const scalar_t* col_;
   const std::string temporal_strategy_;
-  std::vector<scalar_t> sampled_rows_;
   std::vector<scalar_t> sampled_cols_;
+  std::vector<scalar_t> sampled_rows_;
   std::vector<scalar_t> sampled_edge_ids_;
 
 public:
@@ -383,7 +386,7 @@ sample(const at::Tensor& rowptr,
     // }
   }
 
-  int requested_num_threads = 32; // at the moment
+  int requested_num_threads =16; // at the moment
 
   std::vector<int> threads_ranges(requested_num_threads+1);
   int seeds_per_thread = seed.size(0) / requested_num_threads; // handle case when % != 0
@@ -423,8 +426,10 @@ sample(const at::Tensor& rowptr,
 }
 
 // for (int m=0; m<mappers.size(); m++) {
-//   std::cout<<"mapper begin"<<std::endl;
-//       for (auto x: mappers[m].to_local_map) {
+//   std::cout<<"resampled"<<std::endl;
+//   std::cout<<"mapper_id="<<m<<std::endl;
+//   std::cout<<"sampled_num="<<mappers[m].sampled_num<<std::endl;
+//       for (auto &x: mappers[m].resampled_btree_map) {
 //         std::cout<<x.first<<" "<<x.second;
 //       }
 //       std::cout<<std::endl;
@@ -435,7 +440,8 @@ for (int m = 1; m < mappers.size(); m++) {
   sampled_num_by_prev_mappers.push_back(sampled_num_by_prev_mappers[m-1] + mappers[m-1].curr_in_layer);
 }
 // std::cout<<"sampled_num_by_prev_mappers="<<sampled_num_by_prev_mappers<<std::endl;
-  
+
+
 
 // update local_map values
 #pragma omp parallel for num_threads(requested_num_threads)
@@ -443,21 +449,15 @@ for (auto mapper_id = 0; mapper_id < mappers.size(); mapper_id++) {
   mappers[mapper_id].update_local_val(sampled_nodes.size(), sampled_num_by_prev_mappers[mapper_id], mapper_id);
 }
 
-// for (int m=0; m<mappers.size(); m++) {
-//   std::cout<<"new_mapper after"<<std::endl;
-//       for (auto x: mappers[m].to_local_map) {
-//         std::cout<<x.first<<" "<<x.second;
-//       }
-//       std::cout<<std::endl;
-//     }
 
-// sampler.fill_sampled_cols(mappers);
+
 mapper_id = 0;
 std::vector<int> max_currs(mappers.size(), 0);
 
 #pragma omp parallel num_threads(requested_num_threads) private(mapper_id)
 {
   int thread_counter = 0;
+  int sampled_num_thread = 0;
   int thread_id = omp_get_thread_num();
 
   for (auto i = threads_ranges[thread_id]; i < threads_ranges[thread_id + 1]; i++) {
@@ -465,12 +465,11 @@ std::vector<int> max_currs(mappers.size(), 0);
       mapper_id = std::get<0>(sampled_nodes[i]);
     }
     int curr = sampled_num_by_prev_mappers[mapper_id] + max_curr;
-    sampler.fill_sampled_cols(mappers[mapper_id], thread_id, mapper_id, thread_counter, curr, max_currs);
+    sampler.fill_sampled_cols(mappers[mapper_id], thread_id, mapper_id, thread_counter, curr, max_currs, sampled_num_thread);
   }
 }
-
+//  std::cout<<"sampled_cols="<<sampler.sampled_cols_<<std::endl;
 max_curr = *std::max_element(max_currs.begin(), max_currs.end());
-// std::cout<<"max_curr="<<max_curr<<std::endl;
     for (int i = 0; i < thread_private_nodes.size(); ++i) {
       std::copy(thread_private_nodes[i].begin(), thread_private_nodes[i].end(),
                 std::back_inserter(sampled_nodes));
