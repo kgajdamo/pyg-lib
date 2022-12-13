@@ -54,10 +54,8 @@ class Mapper {
     }
     if (res.second) {
       ++curr;
-      ++curr_in_layer;
     } else {
-      // resampled_map.push_back(std::make_tuple(node, sampled_num));
-      resampled_btree_map.insert({sampled_num, node});
+      resampled_map.insert({sampled_num, node});
     }
     ++sampled_num;
     return res;
@@ -92,7 +90,7 @@ class Mapper {
     }
   }
 
-  void update_local_val(size_t sampled_nodes_size, int sampled_num_by_prev_mappers, int mapper_id) {
+  void update_local_val(size_t sampled_nodes_size, int sampled_num_by_prev_mappers, int curr_in_layer) {
     // iterate over local ids of nodes
     for (int i = curr - 1; i>=curr-curr_in_layer; i--) {
       auto it = std::find_if(to_local_map.begin(), to_local_map.end(),
@@ -112,9 +110,8 @@ class Mapper {
   
 public:
 scalar_t curr = 0;
-scalar_t curr_in_layer = 0;
 phmap::flat_hash_map<node_t, scalar_t> to_local_map;
-phmap::btree_map<int, node_t> resampled_btree_map;
+phmap::btree_map<int, node_t> resampled_map;
 int sampled_num = 0;
 };
 

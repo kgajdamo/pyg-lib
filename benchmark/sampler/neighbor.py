@@ -16,7 +16,7 @@ from torch_geometric.sampler.utils import to_csc
 
 argparser = argparse.ArgumentParser()
 argparser.add_argument('--batch-sizes', nargs='+', type=int, default=[
-    # 3,
+    # 4,
     512,
     1024,
     2048,
