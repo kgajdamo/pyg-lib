@@ -118,7 +118,7 @@ class NeighborSampler {
   get_sampled_edges(bool csc = false) {
     TORCH_CHECK(save_edges, "No edges have been stored")
     // std::cout<<"sampled_rows_="<<sampled_rows_<<std::endl;
-    std::cout<<"sampled_cols_="<<sampled_cols_<<std::endl;
+    // std::cout<<"sampled_cols_="<<sampled_cols_<<std::endl;
     const auto row = pyg::utils::from_vector(sampled_rows_);
     const auto col = pyg::utils::from_vector(sampled_cols_);
     c10::optional<at::Tensor> edge_id = c10::nullopt;
@@ -134,8 +134,10 @@ class NeighborSampler {
   }
 
 void fill_sampled_cols(Mapper<node_t, scalar_t>& mapper, const int thread_id, const int mapper_id, int &thread_counter, int &curr, int& sampled_num_thread) {
+    // std::string printit0 = "START: thread_id="+std::to_string(thread_id)+", mapper_id=" + std::to_string(mapper_id)+", thread_counter=" + std::to_string(thread_counter)+"\n";
+    // std::cout<<printit0;
     for (const auto &resampled : mapper.resampled_map) {
-      for (thread_counter; thread_counter < resampled.first; thread_counter++) { 
+      for (thread_counter; thread_counter < resampled.first; thread_counter++) {
         sampled_cols_[sampled_id_offset_ + threads_offsets_[thread_id] + thread_counter] = curr;
         ++curr;
       }
@@ -148,6 +150,10 @@ void fill_sampled_cols(Mapper<node_t, scalar_t>& mapper, const int thread_id, co
       sampled_cols_[sampled_id_offset_ + threads_offsets_[thread_id] + thread_counter] = curr;
       ++curr;
     }
+
+    // std::string printit = "END: thread_id="+std::to_string(thread_id)+", mapper_id=" + std::to_string(mapper_id)+", thread_counter=" + std::to_string(thread_counter)+"\n";
+    // std::cout<<printit;
+
     mapper.sampled_num = 0;
     mapper.resampled_map.clear();
 }
@@ -277,7 +283,7 @@ void fill_sampled_cols(Mapper<node_t, scalar_t>& mapper, const int thread_id, co
     const auto global_dst_node_value = col_[edge_id];
     const auto global_dst_node =
         to_node_t(global_dst_node_value, global_src_node);
-    const auto res = dst_mapper.insert(global_dst_node);
+    const auto res = dst_mapper.insert(global_dst_node, thread_counter);
     if (res.second) {
       out_global_dst_nodes.push_back(global_dst_node);
     }
@@ -298,6 +304,7 @@ void fill_sampled_cols(Mapper<node_t, scalar_t>& mapper, const int thread_id, co
   const scalar_t* rowptr_;
   const scalar_t* col_;
   const std::string temporal_strategy_;
+public:
   std::vector<scalar_t> sampled_cols_;
   std::vector<scalar_t> sampled_rows_;
   std::vector<scalar_t> sampled_edge_ids_;
@@ -374,7 +381,7 @@ sample(const at::Tensor& rowptr,
     // }
   }
 
-  int requested_num_threads = 16; // at the moment
+  int requested_num_threads = 2; // at the moment
 
   std::vector<int> threads_ranges(requested_num_threads+1);
   int seeds_per_thread = seed.size(0) / requested_num_threads; // +1
@@ -440,15 +447,25 @@ mapper_id = 0;
 {
   int thread_counter = 0;
   int sampled_num_thread = 0;
+
+  int test=0;
   int thread_id = omp_get_thread_num();
   int curr = 0;
 
-  for (auto i = threads_ranges[thread_id]; i < threads_ranges[thread_id + 1]; i++) {
-    if constexpr (!std::is_scalar<node_t>::value) {
-      mapper_id = std::get<0>(sampled_nodes[i]);
-    }
-    curr = sampled_num_by_prev_mappers[mapper_id] + threads_ranges[requested_num_threads];
-    sampler.fill_sampled_cols(mappers[mapper_id], thread_id, mapper_id, thread_counter, curr, sampled_num_thread);
+#pragma omp for schedule(static, seeds_per_thread)
+  for (auto i = 0; i < mappers.size(); i++) {
+    // if constexpr (!std::is_scalar<node_t>::value) {
+    //   mapper_id = std::get<0>(sampled_nodes[i]);
+    // }
+    curr = sampled_num_by_prev_mappers[i] + threads_ranges[requested_num_threads];
+    test += mapper_sampled_nodes[i].size() + mappers[i].resampled_map.size();
+
+    // // if (mappers[mapper_id].resampled_map.size() > 0)
+    // //   --sampled_num_thread;
+
+    // std::string printit = "thread_id="+std::to_string(thread_id)+", mapper_id=" + std::to_string(i)+", test=" + std::to_string(test)+", mapper_sampled_size=" + std::to_string(mapper_sampled_nodes[i].size())+"\n";
+    // std::cout<<printit;
+    sampler.fill_sampled_cols(mappers[i], thread_id, i, thread_counter, curr, sampled_num_thread);
   }
 }
 //  std::cout<<"sampled_cols="<<sampler.sampled_cols_<<std::endl;

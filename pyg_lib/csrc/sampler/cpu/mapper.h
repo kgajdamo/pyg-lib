@@ -39,6 +39,28 @@ class Mapper {
 
   }
 
+  std::pair<scalar_t, bool> insert(const node_t& node, int thread_counter) {
+    std::pair<scalar_t, bool> res;
+    if (use_vec) {
+      if constexpr (std::is_scalar<node_t>::value) {
+        auto old = to_local_vec[node];
+        res = std::pair<scalar_t, bool>(old == -1 ? curr : old, old == -1);
+        if (res.second)
+          to_local_vec[node] = curr;
+      }
+    } else {
+      auto out = to_local_map.insert({node, curr});
+      res = std::pair<scalar_t, bool>(out.first->second, out.second);
+    }
+    if (res.second) {
+      ++curr;
+    } else {
+      resampled_map.insert({thread_counter, node});
+    }
+    ++sampled_num;
+    return res;
+  }
+
   std::pair<scalar_t, bool> insert(const node_t& node) {
     std::pair<scalar_t, bool> res;
     if (use_vec) {
