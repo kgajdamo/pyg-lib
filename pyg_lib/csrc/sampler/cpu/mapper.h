@@ -57,7 +57,6 @@ class Mapper {
     } else {
       resampled_map.insert({thread_counter, node});
     }
-    ++sampled_num;
     return res;
   }
 
