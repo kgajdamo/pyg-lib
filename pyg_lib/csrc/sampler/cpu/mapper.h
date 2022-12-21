@@ -75,10 +75,7 @@ class Mapper {
     }
     if (res.second) {
       ++curr;
-    } else {
-      resampled_map.insert({sampled_num, node});
     }
-    ++sampled_num;
     return res;
   }
 
@@ -111,7 +108,7 @@ class Mapper {
     }
   }
 
-  void update_local_val(size_t sampled_nodes_size, int sampled_num_by_prev_mappers, int curr_in_layer) {
+  void update_local_val(size_t sampled_nodes_size, int sampled_num_by_prev_subgraphs, int curr_in_layer) {
     // iterate over local ids of nodes
     for (int i = curr - 1; i>=curr-curr_in_layer; i--) {
       auto it = std::find_if(to_local_map.begin(), to_local_map.end(),
@@ -119,7 +116,7 @@ class Mapper {
       if (it == to_local_map.end())
           return; // raise an error?
       
-      it->second += sampled_nodes_size - curr + curr_in_layer + sampled_num_by_prev_mappers;
+      it->second += sampled_nodes_size - curr + curr_in_layer + sampled_num_by_prev_subgraphs;
     }
   }
 
@@ -133,7 +130,8 @@ public:
 scalar_t curr = 0;
 phmap::flat_hash_map<node_t, scalar_t> to_local_map;
 phmap::btree_map<int, node_t> resampled_map;
-int sampled_num = 0;
+// std::vector<scalar_t> sampled_num_by_prev_subgraphs{0};
+
 };
 
 }  // namespace sampler

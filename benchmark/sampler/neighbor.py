@@ -118,6 +118,7 @@ def test_neighbor(dataset, **kwargs):
             if args.pyg_lib_only:
                 pyg_lib_duration_coma = str(pyg_lib_duration).replace('.', ',')
                 writer.writerow((num_neighbors, batch_size, pyg_lib_duration_coma))
-    f.close()
+    if args.write_csv:
+        f.close()
 if __name__ == '__main__':
     test_neighbor()
