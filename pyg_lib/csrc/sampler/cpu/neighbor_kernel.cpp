@@ -25,6 +25,7 @@ namespace {
 // `node_t` is either a scalar or a pair of scalars (example_id, node_id):
 template <typename node_t,
           typename scalar_t,
+          typename temporal_t,
           bool replace,
           bool save_edges,
           bool save_edge_ids>
@@ -39,6 +40,8 @@ class NeighborSampler {
   }
 
   void allocate_resources(const std::vector<node_t>& global_src_nodes,
+                          const std::vector<scalar_t>& seed_times,
+                          const c10::optional<at::Tensor>& time,
                           size_t begin,
                           size_t end,
                           int64_t count,
@@ -47,7 +50,8 @@ class NeighborSampler {
     if (!save_edges)
       return;
     sampled_id_offset_ = sampled_rows_.size();
-    scalar_t size = get_allocation_size_(global_src_nodes, begin, end, count);
+
+    scalar_t size = get_allocation_size_(global_src_nodes, seed_times, time, begin, end, count);
     if (save_edges) {
       sampled_rows_.resize(sampled_id_offset_ + size);
       sampled_cols_.resize(sampled_id_offset_ + size);
@@ -60,7 +64,7 @@ class NeighborSampler {
     threads_offsets_.resize(num_threads + 1);
 
     for (int tid=1; tid< threads_offsets_.size(); tid++) {
-      scalar_t allocation_size = get_allocation_size_(global_src_nodes, threads_ranges[tid-1], threads_ranges[tid], count);
+      scalar_t allocation_size = get_allocation_size_(global_src_nodes, seed_times, time, threads_ranges[tid-1], threads_ranges[tid], count);
       threads_offsets_[tid] = threads_offsets_[tid - 1] + allocation_size;
     }
     // std::cout<<"threads_offsets="<<threads_offsets_<<std::endl;
@@ -93,6 +97,9 @@ class NeighborSampler {
                        int& node_counter) {
     auto row_start = rowptr_[to_scalar_t(global_src_node)];
     auto row_end = rowptr_[to_scalar_t(global_src_node) + 1];
+    // std::string printit0 = "first temp row_start="+std::to_string(row_start)+" new row end="+std::to_string(row_end)+" seed_time="+std::to_string(seed_time)+"\n";
+    //     std::cout<<printit0;
+
 
     // Find new `row_end` such that all neighbors fulfill temporal constraints:
     auto it = std::lower_bound(
@@ -103,6 +110,8 @@ class NeighborSampler {
     if (temporal_strategy_ == "last") {
       row_start = std::max(row_start, (scalar_t)(row_end - count));
     }
+    // std::string printit = "new row_start="+std::to_string(row_start)+" new row end="+std::to_string(row_end)+"\n";
+    // std::cout<<printit;
 
     if (row_end - row_start > 1) {
       TORCH_CHECK(time[col_[row_start]] <= time[col_[row_end - 1]],
@@ -116,13 +125,13 @@ class NeighborSampler {
   std::tuple<at::Tensor, at::Tensor, c10::optional<at::Tensor>>
   get_sampled_edges(bool csc = false) {
     TORCH_CHECK(save_edges, "No edges have been stored")
-    std::cout<<"sampled_rows_="<<sampled_rows_<<std::endl;
-    std::cout<<"sampled_cols_="<<sampled_cols_<<std::endl;
+    // std::cout<<"sampled_rows_="<<sampled_rows_<<std::endl;
+    // std::cout<<"sampled_cols_="<<sampled_cols_<<std::endl;
     const auto row = pyg::utils::from_vector(sampled_rows_);
     const auto col = pyg::utils::from_vector(sampled_cols_);
     c10::optional<at::Tensor> edge_id = c10::nullopt;
     if (save_edge_ids) {
-      std::cout<<"sampled_edge_ids_="<<sampled_edge_ids_<<std::endl;
+      // std::cout<<"sampled_edge_ids_="<<sampled_edge_ids_<<std::endl;
       edge_id = pyg::utils::from_vector(sampled_edge_ids_);
     }
     if (!csc) {
@@ -133,8 +142,6 @@ class NeighborSampler {
   }
 
 void fill_sampled_cols(Mapper<node_t, scalar_t>& mapper, const int thread_id, int &node_counter, int &curr, const int sampled_num_thread) {
-    // std::string printit0 = "START: thread_id="+std::to_string(thread_id)+", m_id=" + std::to_string(m_id)+", sampled_num_thread=" + std::to_string(sampled_num_thread)+", mapper.sampled_num=" + std::to_string(mapper.sampled_num)+"\n";
-    // std::cout<<printit0;
     for (const auto &resampled : mapper.resampled_map) {
       for (node_counter; node_counter < resampled.first; node_counter++) {
         sampled_cols_[sampled_id_offset_ + threads_offsets_[thread_id] + node_counter] = curr;
@@ -153,17 +160,53 @@ void fill_sampled_cols(Mapper<node_t, scalar_t>& mapper, const int thread_id, in
 }
 
  private:
-  // only for uniform case
   scalar_t get_allocation_size_(const std::vector<node_t>& global_src_nodes,
+                                const std::vector<scalar_t>& seed_times,
+                                const c10::optional<at::Tensor>& time,
                                 size_t begin,
                                 size_t end,
                                 int64_t count) {
     scalar_t sum = 0;
+
+    if (!time.has_value()) {
 #pragma omp simd reduction(+ : sum)
-    for (size_t i = begin; i < end; ++i) {
-      const auto population = rowptr_[to_scalar_t(global_src_nodes[i]) + 1] -
-                              rowptr_[to_scalar_t(global_src_nodes[i])];
-      sum += (count < 0 || count > population) ? population : count;
+      for (size_t i = begin; i < end; ++i) {
+        const auto population = rowptr_[to_scalar_t(global_src_nodes[i]) + 1] -
+                                rowptr_[to_scalar_t(global_src_nodes[i])];
+        sum += (count < 0 || count > population) ? population : count;
+      }
+    } else if constexpr (!std::is_scalar<node_t>::value) { // Temporal:
+      const auto time_data = time.value().data_ptr<temporal_t>();
+// #pragma omp simd reduction(+ : sum)
+      for (size_t i = begin; i < end; ++i) {
+        const auto batch_idx = global_src_nodes[i].first;
+        auto row_start = rowptr_[to_scalar_t(global_src_nodes[i])];
+        auto row_end = rowptr_[to_scalar_t(global_src_nodes[i]) + 1];
+        // std::cout<<"first row_start="<<row_start<<"row_end="<<row_end<<std::endl;
+        // std::cout<<"seed_times[batch_idx]="<<seed_times[batch_idx]<<std::endl;
+
+        // Find new `row_end` such that all neighbors fulfill temporal constraints:
+        auto it = std::lower_bound(
+            col_ + row_start, col_ + row_end, seed_times[batch_idx],
+            [&](const scalar_t& a, const scalar_t& b) { return time_data[a] < b; });
+        row_end = it - col_;
+
+        if (temporal_strategy_ == "last") {
+          row_start = std::max(row_start, (scalar_t)(row_end - count));
+        }
+
+        if (row_end - row_start > 1) {
+          TORCH_CHECK(time_data[col_[row_start]] <= time_data[col_[row_end - 1]],
+                      "Found invalid non-sorted temporal neighborhood");
+        }
+
+        // std::string printit = "new row_start="+std::to_string(row_start)+" new row end="+std::to_string(row_end)+"\n";
+        // std::cout<<printit;
+
+        const auto population = row_end - row_start;
+        sum += (count < 0 || count > population) ? population : count;
+        // std::cout<<"sum="<<sum<<std::endl;
+      }
     }
     return sum;
   }
@@ -257,8 +300,8 @@ void fill_sampled_cols(Mapper<node_t, scalar_t>& mapper, const int thread_id, in
       }
     }
     ++node_counter;
-    std::string printit = "thread_id="+std::to_string(thread_id) + " node_counter="+std::to_string(node_counter)+"\n";
-    std::cout<<printit;
+    // std::string printit = "thread_id="+std::to_string(thread_id) + " node_counter="+std::to_string(node_counter)+"\n";
+    // std::cout<<printit;
   }
 
   int64_t sampled_id_offset_ = 0;
@@ -307,7 +350,7 @@ sample(const at::Tensor& rowptr,
   typedef std::pair<scalar_t, scalar_t> pair_scalar_t;
   typedef std::conditional_t<!disjoint, scalar_t, pair_scalar_t> node_t;
   typedef int64_t temporal_t;
-  typedef NeighborSampler<node_t, scalar_t, replace, directed, return_edge_id>
+  typedef NeighborSampler<node_t, scalar_t, temporal_t, replace, directed, return_edge_id>
       NeighborSamplerImpl;
 
   pyg::random::RandintEngine<scalar_t> generator;
@@ -377,8 +420,7 @@ sample(const at::Tensor& rowptr,
     const auto count = num_neighbors[ell];
 
     // preparation for going parallel
-    sampler.allocate_resources(sampled_nodes, begin, end, count, num_threads, threads_ranges);
-
+    sampler.allocate_resources(sampled_nodes, seed_times, time, begin, end, count, num_threads, threads_ranges);
     omp_set_num_threads(num_threads);
     std::vector<std::vector<node_t>> subgraph_sampled_nodes(
         mappers.size());
@@ -388,8 +430,8 @@ sample(const at::Tensor& rowptr,
   const int thread_id = omp_get_thread_num();
   int node_counter = 0;
   int m_id = 0;
-  std::string printit = "thread_id="+std::to_string(thread_id) +"\n";
-  std::cout<<printit;
+  // std::string printit = "thread_id="+std::to_string(thread_id) +"\n";
+  // std::cout<<printit;
 
   if (!time.has_value()) {
     for (auto i = threads_ranges[thread_id]; i < threads_ranges[thread_id + 1]; i++) {
@@ -406,6 +448,8 @@ sample(const at::Tensor& rowptr,
     for (auto i = threads_ranges[thread_id]; i < threads_ranges[thread_id + 1]; i++) {
       const auto batch_idx = sampled_nodes[i].first;
       m_id = std::get<0>(sampled_nodes[i]);
+      // std::string printit = "batch_idx="+std::to_string(batch_idx)+" m_id="+std::to_string(m_id)+"\n";
+      // std::cout<<printit;
 
       sampler.temporal_sample(/*global_src_node=*/sampled_nodes[i],
         /*local_src_node=*/i, count, seed_times[batch_idx], time_data,
@@ -418,24 +462,24 @@ sample(const at::Tensor& rowptr,
 // for (int m=0; m<mappers.size(); m++) {
 //   std::cout<<"resampled"<<std::endl;
 //   std::cout<<"m_id="<<m<<std::endl;
-//   std::cout<<"sampled_num="<<mappers[m].sampled_num<<std::endl;
 //       for (auto &x: mappers[m].resampled_map) {
 //         std::cout<<x.first<<" "<<x.second;
 //       }
 //       std::cout<<std::endl;
 //     }
-std::cout<<"aafter";
 std::vector<int> sampled_num_by_prev_subgraphs{0};
 for (int m_id = 1; m_id < mappers.size(); m_id++) {
   sampled_num_by_prev_subgraphs.push_back(sampled_num_by_prev_subgraphs[m_id-1] + subgraph_sampled_nodes[m_id-1].size());
 }
-std::cout<<"sampled_num_by_prev_subgraphs="<<sampled_num_by_prev_subgraphs<<std::endl;
+// std::cout<<"sampled_num_by_prev_subgraphs="<<sampled_num_by_prev_subgraphs<<std::endl;
 
 // update local_map values
 #pragma omp parallel for num_threads(num_threads)
 for (auto m_id = 0; m_id < mappers.size(); m_id++) {
   mappers[m_id].update_local_val(sampled_nodes.size(), sampled_num_by_prev_subgraphs[m_id], subgraph_sampled_nodes[m_id].size());
 }
+
+// std::cout<<"after update locaal="<<std::endl;
 
 #pragma omp parallel num_threads(num_threads)
 {
@@ -455,7 +499,7 @@ for (auto m_id = 0; m_id < mappers.size(); m_id++) {
     sampler.fill_sampled_cols(mappers[m_id], thread_id, node_counter, curr, sampled_num_thread);
   }
 }
- std::cout<<"sampled_cols="<<sampler.sampled_cols_<<std::endl;
+//  std::cout<<"sampled_cols="<<sampler.sampled_cols_<<std::endl;
   for (int i = 0; i < subgraph_sampled_nodes.size(); ++i) {
     std::copy(subgraph_sampled_nodes[i].begin(), subgraph_sampled_nodes[i].end(),
               std::back_inserter(sampled_nodes));
@@ -463,14 +507,12 @@ for (auto m_id = 0; m_id < mappers.size(); m_id++) {
 
     begin = end, end = sampled_nodes.size();
 
-    std::cout<<"threads_ranges_before="<<threads_ranges<<std::endl;
+    // std::cout<<"threads_ranges_before="<<threads_ranges<<std::endl;
     int m_id = 0;
     int m_id_end = seeds_per_thread;
     threads_ranges[0] = begin;
     for (int t=1; t<threads_ranges.size(); t++) {
       threads_ranges[t] = threads_ranges[t-1];
-      // std::cout<<"en="<<en<<std::endl;
-      // std::cout<<"subgraph_sampled_nodes.size()="<<subgraph_sampled_nodes.size()<<std::endl;
       for (m_id; m_id<m_id_end; m_id++) {
         threads_ranges[t] += subgraph_sampled_nodes[m_id].size();
       }
@@ -478,7 +520,7 @@ for (auto m_id = 0; m_id < mappers.size(); m_id++) {
       m_id_end = std::min(m_id_end + seeds_per_thread, static_cast<int>(seed.size(0)));
     }
 
-    std::cout<<"threads_ranges_after="<<threads_ranges<<std::endl;
+    // std::cout<<"threads_ranges_after="<<threads_ranges<<std::endl;
   }
 
   out_node_id = pyg::utils::from_vector(sampled_nodes);
@@ -552,7 +594,8 @@ sample(const std::vector<node_type>& node_types,
   AT_DISPATCH_INTEGRAL_TYPES(scalar_type, "hetero_sample_kernel", [&] {
     typedef std::pair<scalar_t, scalar_t> pair_scalar_t;
     typedef std::conditional_t<!disjoint, scalar_t, pair_scalar_t> node_t;
-    typedef NeighborSampler<node_t, scalar_t, replace, directed, return_edge_id>
+    typedef int64_t temporal_t;
+    typedef NeighborSampler<node_t, scalar_t, temporal_t, replace, directed, return_edge_id>
         NeighborSamplerImpl;
 
     pyg::random::RandintEngine<scalar_t> generator;
