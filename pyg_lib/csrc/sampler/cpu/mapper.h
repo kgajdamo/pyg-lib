@@ -108,15 +108,12 @@ class Mapper {
     }
   }
 
-  void update_local_val(size_t sampled_nodes_size, int sampled_num_by_prev_subgraphs, int curr_in_layer) {
-    // iterate over local ids of nodes
-    for (int i = curr - 1; i>=curr-curr_in_layer; i--) {
-      auto it = std::find_if(to_local_map.begin(), to_local_map.end(),
-                           [i](auto&& p) { return p.second == i; });
-      if (it == to_local_map.end())
-          return; // raise an error?
-      
-      it->second += sampled_nodes_size - curr + curr_in_layer + sampled_num_by_prev_subgraphs;
+  void update_local_val(size_t sampled_nodes_size, int sampled_num_by_prev_subgraphs, std::vector<node_t>& subgraph_sampled_nodes) {
+    // iterate over sampled nodes to update their local values
+    for (const auto &sampled_node: subgraph_sampled_nodes) {
+      const auto search = to_local_map.find(sampled_node);
+      if (search != to_local_map.end())
+        search->second += sampled_nodes_size - curr + subgraph_sampled_nodes.size() + sampled_num_by_prev_subgraphs;
     }
   }
 
