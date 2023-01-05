@@ -40,13 +40,13 @@ argparser.add_argument('--write-csv', action='store_true')
 argparser.add_argument('--pyg-lib-only', action='store_true')
 args = argparser.parse_args()
 
-edge_index = torch.tensor([[0, 1, 0, 4, 1, 2, 2, 3, 2, 5, 3, 4, 3, 5, 6, 3, 6, 4, 6, 5, 6, 7, 7, 8, 8, 5],
-                           [1, 0, 4, 0, 2, 1, 3, 2, 5, 2, 4, 3, 5, 3, 3, 6, 4, 6, 5, 6, 7, 6, 8, 7, 5, 8]], dtype=torch.long)
-x = torch.tensor([[-1], [0], [1], [2], [3], [4], [5], [6], [7]], dtype=torch.float)
+# edge_index = torch.tensor([[0, 1, 0, 4, 1, 2, 2, 3, 2, 5, 3, 4, 3, 5, 6, 3, 6, 4, 6, 5, 6, 7, 7, 8, 8, 5],
+#                            [1, 0, 4, 0, 2, 1, 3, 2, 5, 2, 4, 3, 5, 3, 3, 6, 4, 6, 5, 6, 7, 6, 8, 7, 5, 8]], dtype=torch.long)
+# x = torch.tensor([[-1], [0], [1], [2], [3], [4], [5], [6], [7]], dtype=torch.float)
 
-data = Data(x=x, edge_index=edge_index, y=2)
+# data = Data(x=x, edge_index=edge_index, y=2)
 
-num_nodes = 9
+# num_nodes = 9
 
 @withSeed
 @withDataset('DIMACS10', 'citationCiteseer')
@@ -132,9 +132,8 @@ def test_neighbor(dataset, **kwargs):
             # print(f'torch-sparse={torch_sparse_duration:.3f} seconds')
             # print(f'         dgl={dgl_duration:.3f} seconds')
             print()
-            if args.pyg_lib_only:
-                pyg_lib_duration_coma = str(pyg_lib_duration).replace('.', ',')
-                writer.writerow((num_neighbors, batch_size, pyg_lib_duration_coma))
+            pyg_lib_duration_coma = str(pyg_lib_duration).replace('.', ',')
+            writer.writerow((num_neighbors, batch_size, pyg_lib_duration_coma))
     if args.write_csv:
         f.close()
 if __name__ == '__main__':

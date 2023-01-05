@@ -97,9 +97,6 @@ class NeighborSampler {
                        int& node_counter) {
     auto row_start = rowptr_[to_scalar_t(global_src_node)];
     auto row_end = rowptr_[to_scalar_t(global_src_node) + 1];
-    // std::string printit0 = "first temp row_start="+std::to_string(row_start)+" new row end="+std::to_string(row_end)+" seed_time="+std::to_string(seed_time)+"\n";
-    //     std::cout<<printit0;
-
 
     // Find new `row_end` such that all neighbors fulfill temporal constraints:
     auto it = std::lower_bound(
@@ -388,29 +385,27 @@ sample(const at::Tensor& rowptr,
     }
   }
   
-  const int requested_num_threads = 32;
+  const int requested_num_threads = omp_get_max_threads();
   // std::cout<<"requested_num_threads="<<requested_num_threads<<std::endl;
-  int num_threads = requested_num_threads; // at the moment
+  int num_threads = requested_num_threads;
   if (requested_num_threads >= seed.size(0)) {
     num_threads = seed.size(0);
-  } else {
-    if (seed.size(0) % requested_num_threads != 0) {
+  } else if (seed.size(0) % requested_num_threads != 0) {
       int chunk_size = seed.size(0) / requested_num_threads + 1;
-
       num_threads = seed.size(0) / chunk_size + 1;
-    }
   }
   // std::cout<<"num_threads="<<num_threads<<std::endl;
 
-  std::vector<int> threads_ranges(num_threads+1);
+  
   // const int seeds_per_thread = seed.size(0) / num_threads;
   const int seeds_per_thread = seed.size(0) % num_threads == 0 ? seed.size(0) / num_threads : seed.size(0) / num_threads + 1;
   // std::cout<<"seeds_per_thread="<<seeds_per_thread<<std::endl;
 
-  for (int tid=0; tid < num_threads; tid++) {
-    threads_ranges[tid] = tid * seeds_per_thread;
+  std::vector<int> threads_ranges;
+  for (auto tid=0; tid < num_threads; tid++) {
+    threads_ranges.push_back(tid * seeds_per_thread);
   }
-  threads_ranges[num_threads] = std::min(num_threads * seeds_per_thread, static_cast<int>(seed.size(0)));
+  threads_ranges.push_back(std::min(num_threads * seeds_per_thread, static_cast<int>(seed.size(0))));
   // std::cout<<"threads_ranges="<<threads_ranges<<std::endl;
 
   size_t begin = 0, end = seed.size(0);
@@ -420,10 +415,10 @@ sample(const at::Tensor& rowptr,
 
     // preparation for going parallel
     sampler.allocate_resources(sampled_nodes, seed_times, time, begin, end, count, num_threads, threads_ranges);
-    omp_set_num_threads(num_threads);
     std::vector<std::vector<node_t>> subgraph_sampled_nodes(
         mappers.size());
 
+    omp_set_num_threads(num_threads);
 #pragma omp parallel num_threads(num_threads)
 {
   const int thread_id = omp_get_thread_num();
@@ -485,10 +480,10 @@ for (int m_id = 1; m_id < mappers.size(); m_id++) {
 }
 // std::cout<<"sampled_num_by_prev_subgraphs="<<sampled_num_by_prev_subgraphs<<std::endl;
 
-
-
 // update local_map values
-#pragma omp parallel for num_threads(num_threads)
+#pragma omp parallel num_threads(num_threads)
+{
+#pragma omp for
 for (auto m_id = 0; m_id < mappers.size(); m_id++) {
   mappers[m_id].update_local_val(sampled_nodes.size(), sampled_num_by_prev_subgraphs[m_id], subgraph_sampled_nodes[m_id]);
 }
@@ -502,8 +497,6 @@ for (auto m_id = 0; m_id < mappers.size(); m_id++) {
 //     }
 // std::cout<<"after update locaal="<<std::endl;
 
-#pragma omp parallel num_threads(num_threads)
-{
   int node_counter = 0;
   int sampled_num_thread = 0;
 
