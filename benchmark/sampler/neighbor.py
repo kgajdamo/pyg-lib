@@ -1,41 +1,47 @@
 import argparse
 import ast
-import time
 import csv
+import time
 
 # import dgl
 import torch
 import torch_sparse  # noqa
+# from torch_geometric.data import Data
+# from torch_geometric.sampler.utils import to_csc
 from tqdm import tqdm
 
 import pyg_lib
 from pyg_lib.testing import withDataset, withSeed
 
-from torch_geometric.data import Data
-from torch_geometric.sampler.utils import to_csc
-
 argparser = argparse.ArgumentParser()
-argparser.add_argument('--batch-sizes', nargs='+', type=int, default=[
-    # 4,
-    512,
-    1024,
-    2048,
-    4096,
-    8192,
-])
+argparser.add_argument(
+    '--batch-sizes',
+    nargs='+',
+    type=int,
+    default=[
+        # 4,
+        512,
+        1024,
+        2048,
+        4096,
+        8192,
+    ])
 argparser.add_argument('--directed', action='store_true')
 argparser.add_argument('--disjoint', action='store_true')
-argparser.add_argument('--num_neighbors', type=ast.literal_eval, default=[
-    # [2, 2],
-    [-1],
-    [15, 10, 5],
-    [20, 15, 10],
-])
+argparser.add_argument(
+    '--num_neighbors',
+    type=ast.literal_eval,
+    default=[
+        # [2, 2],
+        [-1],
+        [15, 10, 5],
+        [20, 15, 10],
+    ])
 argparser.add_argument('--replace', action='store_true')
 argparser.add_argument('--shuffle', action='store_true')
 argparser.add_argument('--temporal', action='store_true')
 argparser.add_argument('--temporal-strategy', choices=['uniform', 'last'],
-                        default='uniform')
+                       default='uniform')
 argparser.add_argument('--write-csv', action='store_true')
 argparser.add_argument('--pyg-lib-only', action='store_true')
 args = argparser.parse_args()
@@ -48,12 +54,13 @@ args = argparser.parse_args()
 
 # num_nodes = 9
 
+
 @withSeed
 @withDataset('DIMACS10', 'citationCiteseer')
 def test_neighbor(dataset, **kwargs):
     if args.temporal and not args.disjoint:
-         raise ValueError(
-             "Temporal sampling needs to create disjoint subgraphs")
+        raise ValueError(
+            "Temporal sampling needs to create disjoint subgraphs")
     (rowptr, col), num_nodes = dataset, dataset[0].size(0) - 1
     # dgl_graph = dgl.graph(('csc', (rowptr, col, torch.arange(col.size(0)))))
 
@@ -72,12 +79,12 @@ def test_neighbor(dataset, **kwargs):
         node_perm = torch.randperm(num_nodes)
     else:
         node_perm = torch.arange(num_nodes)
-    
+
     if args.write_csv:
         f = open('./neighbor_benchmark_parallel.csv', 'a', newline='')
         writer = csv.writer(f)
-        writer.writerow(('num_neighbors', 'batch_size', 'pyg-lib', f'directed = {args.directed}'))
-
+        writer.writerow(('num_neighbors', 'batch_size', 'pyg-lib',
+                         f'directed = {args.directed}'))
 
     for num_neighbors in args.num_neighbors:
         for batch_size in args.batch_sizes:
@@ -99,7 +106,7 @@ def test_neighbor(dataset, **kwargs):
                     return_edge_id=True,
                 )
             pyg_lib_duration = time.perf_counter() - t
-            
+
             # t = time.perf_counter()
             # for seed in tqdm(node_perm.split(batch_size)):
             #     torch.ops.torch_sparse.neighbor_sample(
@@ -136,5 +143,7 @@ def test_neighbor(dataset, **kwargs):
             writer.writerow((num_neighbors, batch_size, pyg_lib_duration_coma))
     if args.write_csv:
         f.close()
+
+
 if __name__ == '__main__':
     test_neighbor()

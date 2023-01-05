@@ -13,7 +13,6 @@ namespace sampler {
 // implementations as well.
 template <typename node_t, typename scalar_t>
 class Mapper {
-
  public:
   Mapper(const size_t num_nodes, const size_t num_entries = -1)
       : num_nodes(num_nodes), num_entries(num_entries) {
@@ -36,7 +35,6 @@ class Mapper {
     if (use_vec) {
       to_local_vec.resize(num_nodes, -1);
     }
-
   }
 
   std::pair<scalar_t, bool> insert(const node_t& node, int thread_counter) {
@@ -108,12 +106,16 @@ class Mapper {
     }
   }
 
-  void update_local_val(size_t sampled_nodes_size, int sampled_num_by_prev_subgraphs, std::vector<node_t>& subgraph_sampled_nodes) {
+  void update_local_val(size_t sampled_nodes_size,
+                        int sampled_num_by_prev_subgraphs,
+                        std::vector<node_t>& subgraph_sampled_nodes) {
     // iterate over sampled nodes to update their local values
-    for (const auto &sampled_node: subgraph_sampled_nodes) {
+    for (const auto& sampled_node : subgraph_sampled_nodes) {
       const auto search = to_local_map.find(sampled_node);
       if (search != to_local_map.end())
-        search->second += sampled_nodes_size - curr + subgraph_sampled_nodes.size() + sampled_num_by_prev_subgraphs;
+        search->second += sampled_nodes_size - curr +
+                          subgraph_sampled_nodes.size() +
+                          sampled_num_by_prev_subgraphs;
     }
   }
 
@@ -122,13 +124,12 @@ class Mapper {
 
   bool use_vec;
   std::vector<scalar_t> to_local_vec;
-  
-public:
-scalar_t curr = 0;
-phmap::flat_hash_map<node_t, scalar_t> to_local_map;
-phmap::btree_map<int, node_t> resampled_map;
-// std::vector<scalar_t> sampled_num_by_prev_subgraphs{0};
 
+ public:
+  scalar_t curr = 0;
+  phmap::flat_hash_map<node_t, scalar_t> to_local_map;
+  phmap::btree_map<int, node_t> resampled_map;
+  // std::vector<scalar_t> sampled_num_by_prev_subgraphs{0};
 };
 
 }  // namespace sampler
