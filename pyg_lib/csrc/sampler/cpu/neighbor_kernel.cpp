@@ -78,7 +78,7 @@ class NeighborSampler {
                       pyg::sampler::Mapper<node_t, scalar_t>& dst_mapper,
                       pyg::random::RandintEngine<scalar_t>& generator,
                       std::vector<node_t>& out_global_dst_nodes,
-                      int& node_counter) {
+                      int* node_counter = nullptr) {
     const auto row_start = rowptr_[to_scalar_t(global_src_node)];
     const auto row_end = rowptr_[to_scalar_t(global_src_node) + 1];
 
@@ -94,7 +94,7 @@ class NeighborSampler {
                        pyg::sampler::Mapper<node_t, scalar_t>& dst_mapper,
                        pyg::random::RandintEngine<scalar_t>& generator,
                        std::vector<node_t>& out_global_dst_nodes,
-                       int& node_counter) {
+                       int* node_counter = nullptr) {
     auto row_start = rowptr_[to_scalar_t(global_src_node)];
     auto row_end = rowptr_[to_scalar_t(global_src_node) + 1];
 
@@ -242,7 +242,7 @@ class NeighborSampler {
                pyg::sampler::Mapper<node_t, scalar_t>& dst_mapper,
                pyg::random::RandintEngine<scalar_t>& generator,
                std::vector<node_t>& out_global_dst_nodes,
-               int& node_counter) {
+               int* node_counter = nullptr) {
     if (count == 0)
       return;
 
@@ -290,25 +290,41 @@ class NeighborSampler {
                   const scalar_t local_src_node,
                   pyg::sampler::Mapper<node_t, scalar_t>& dst_mapper,
                   std::vector<node_t>& out_global_dst_nodes,
-                  int& node_counter) {
+                  int* node_counter = nullptr) {
     const auto global_dst_node_value = col_[edge_id];
     const auto global_dst_node =
         to_node_t(global_dst_node_value, global_src_node);
-    const auto res = dst_mapper.insert(global_dst_node, node_counter);
-    if (res.second) {
-      out_global_dst_nodes.push_back(global_dst_node);
-    }
-    if (save_edges) {
-      const int tid = omp_get_thread_num();
-      sampled_rows_[sampled_id_offset_ + threads_offsets_[tid] + node_counter] =
-          local_src_node;
-
-      if (save_edge_ids) {
-        sampled_edge_ids_[sampled_id_offset_ + threads_offsets_[tid] +
-                          node_counter] = edge_id;
+    const bool parallel = node_counter != nullptr;
+    if (!parallel) {
+      const auto res = dst_mapper.insert(global_dst_node);
+      if (res.second) {  // not yet sampled.
+        out_global_dst_nodes.push_back(global_dst_node);
       }
+      if (save_edges) {
+        sampled_rows_.push_back(local_src_node);
+        sampled_cols_.push_back(res.first);
+        if (save_edge_ids) {
+          sampled_edge_ids_.push_back(edge_id);
+        }
+      }
+    } else {
+      const auto res = dst_mapper.insert(global_dst_node, *node_counter);
+      if (res.second) {
+        out_global_dst_nodes.push_back(global_dst_node);
+      }
+      if (save_edges) {
+        const int tid = omp_get_thread_num();
+        sampled_rows_[sampled_id_offset_ + threads_offsets_[tid] +
+                      *node_counter] = local_src_node;
+
+        if (save_edge_ids) {
+          sampled_edge_ids_[sampled_id_offset_ + threads_offsets_[tid] +
+                            *node_counter] = edge_id;
+        }
+      }
+      ++(*node_counter);
     }
-    ++node_counter;
+
     // std::string printit = "tid="+std::to_string(tid) + "
     // node_counter="+std::to_string(node_counter)+"\n"; std::cout<<printit;
   }
@@ -325,76 +341,127 @@ class NeighborSampler {
 };
 
 // Homogeneous neighbor sampling ///////////////////////////////////////////////
+template <typename node_t,
+          typename scalar_t,
+          typename temporal_t,
+          typename NeighborSamplerImpl,
+          bool replace,
+          bool directed,
+          bool disjoint,
+          bool return_edge_id>
+void sample_seq(NeighborSamplerImpl& sampler,
+                std::vector<node_t>& sampled_nodes,
+                const at::Tensor& rowptr,
+                const at::Tensor& col,
+                const at::Tensor& seed,
+                const std::vector<int64_t>& num_neighbors,
+                const c10::optional<at::Tensor>& time,
+                const c10::optional<at::Tensor>& seed_time,
+                const bool csc,
+                const std::string temporal_strategy) {
+  // typedef std::pair<scalar_t, scalar_t> pair_scalar_t;
+  // typedef std::conditional_t<!disjoint, scalar_t, pair_scalar_t> node_t;
 
-template <bool replace, bool directed, bool disjoint, bool return_edge_id>
-std::tuple<at::Tensor, at::Tensor, at::Tensor, c10::optional<at::Tensor>>
-sample(const at::Tensor& rowptr,
-       const at::Tensor& col,
-       const at::Tensor& seed,
-       const std::vector<int64_t>& num_neighbors,
-       const c10::optional<at::Tensor>& time,
-       const c10::optional<at::Tensor>& seed_time,
-       const bool csc,
-       const std::string temporal_strategy) {
-  TORCH_CHECK(!time.has_value() || disjoint,
-              "Temporal sampling needs to create disjoint subgraphs");
-
-  TORCH_CHECK(rowptr.is_contiguous(), "Non-contiguous 'rowptr'");
-  TORCH_CHECK(col.is_contiguous(), "Non-contiguous 'col'");
-  TORCH_CHECK(seed.is_contiguous(), "Non-contiguous 'seed'");
-  if (time.has_value()) {
-    TORCH_CHECK(time.value().is_contiguous(), "Non-contiguous 'time'");
-  }
-  if (seed_time.has_value()) {
-    TORCH_CHECK(seed_time.value().is_contiguous(),
-                "Non-contiguous 'seed_time'");
-  }
-
-  at::Tensor out_row, out_col, out_node_id;
-  c10::optional<at::Tensor> out_edge_id = c10::nullopt;
-
-  // AT_DISPATCH_INTEGRAL_TYPES(seed.scalar_type(), "sample_kernel", [&] {
-  using scalar_t = int64_t;
-  typedef std::pair<scalar_t, scalar_t> pair_scalar_t;
-  typedef std::conditional_t<!disjoint, scalar_t, pair_scalar_t> node_t;
-  typedef int64_t temporal_t;
-  typedef NeighborSampler<node_t, scalar_t, temporal_t, replace, directed,
-                          return_edge_id>
-      NeighborSamplerImpl;
-
+  // std::vector<node_t> sampled_nodes;
   pyg::random::RandintEngine<scalar_t> generator;
 
-  std::vector<node_t> sampled_nodes;
-  // const auto seed_size = seed.size(0);
-
-  std::vector<Mapper<node_t, scalar_t>> mappers(
-      seed.size(0), Mapper<node_t, scalar_t>(/*num_nodes=*/rowptr.size(0) - 1));
-  auto sampler = NeighborSamplerImpl(
-      rowptr.data_ptr<scalar_t>(), col.data_ptr<scalar_t>(), temporal_strategy);
-
-  std::vector<scalar_t> seed_times;
+  auto mapper = Mapper<node_t, scalar_t>(/*num_nodes=*/rowptr.size(0) - 1);
+  std::vector<temporal_t> seed_times;
 
   const auto seed_data = seed.data_ptr<scalar_t>();
-  if constexpr (!disjoint) {
-    // sampled_nodes = pyg::utils::to_vector<scalar_t>(seed);
-    // mapper.fill(seed);
+  if constexpr (!disjoint && std::is_scalar<node_t>::value) {
+    sampled_nodes = pyg::utils::to_vector<scalar_t>(seed);
+    mapper.fill(seed);
   } else {
+    for (size_t i = 0; i < seed.numel(); ++i) {
+      sampled_nodes.push_back({i, seed_data[i]});
+      mapper.insert({i, seed_data[i]});
+    }
+    if (seed_time.has_value()) {
+      const auto seed_time_data = seed_time.value().data_ptr<temporal_t>();
+      for (size_t i = 0; i < seed.numel(); ++i) {
+        seed_times.push_back(seed_time_data[i]);
+      }
+    } else if (time.has_value()) {
+      const auto time_data = time.value().data_ptr<temporal_t>();
+      for (size_t i = 0; i < seed.numel(); ++i) {
+        seed_times.push_back(time_data[seed_data[i]]);
+      }
+    }
+  }
+
+  size_t begin = 0, end = seed.size(0);
+  for (size_t ell = 0; ell < num_neighbors.size(); ++ell) {
+    const auto count = num_neighbors[ell];
+
+    if (!time.has_value()) {
+      for (size_t i = begin; i < end; ++i) {
+        sampler.uniform_sample(/*global_src_node=*/sampled_nodes[i],
+                               /*local_src_node=*/i, count, mapper, generator,
+                               /*out_global_dst_nodes=*/sampled_nodes);
+      }
+    } else if constexpr (!std::is_scalar<node_t>::value) {  // Temporal:
+      const auto time_data = time.value().data_ptr<temporal_t>();
+      for (size_t i = begin; i < end; ++i) {
+        const auto batch_idx = sampled_nodes[i].first;
+        sampler.temporal_sample(/*global_src_node=*/sampled_nodes[i],
+                                /*local_src_node=*/i, count,
+                                seed_times[batch_idx], time_data, mapper,
+                                generator,
+                                /*out_global_dst_nodes=*/sampled_nodes);
+      }
+    }
+    begin = end, end = sampled_nodes.size();
+  }
+
+  // return sampled_nodes;
+}
+
+template <typename node_t,
+          typename scalar_t,
+          typename temporal_t,
+          typename NeighborSamplerImpl,
+          bool replace,
+          bool directed,
+          bool disjoint,
+          bool return_edge_id>
+void sample_parallel(NeighborSamplerImpl& sampler,
+                     std::vector<node_t>& sampled_nodes,
+                     const at::Tensor& rowptr,
+                     const at::Tensor& col,
+                     const at::Tensor& seed,
+                     const std::vector<int64_t>& num_neighbors,
+                     const c10::optional<at::Tensor>& time,
+                     const c10::optional<at::Tensor>& seed_time,
+                     const bool csc,
+                     const std::string temporal_strategy) {
+  // typedef std::pair<scalar_t, scalar_t> pair_scalar_t;
+  // typedef std::conditional_t<!disjoint, scalar_t, pair_scalar_t> node_t;
+
+  // std::vector<node_t> sampled_nodes;
+
+  std::vector<scalar_t> seed_times;
+  pyg::random::RandintEngine<scalar_t> generator;
+  std::vector<Mapper<node_t, scalar_t>> mappers(
+      seed.size(0), Mapper<node_t, scalar_t>(/*num_nodes=*/rowptr.size(0) - 1));
+
+  const auto seed_data = seed.data_ptr<scalar_t>();
+  if constexpr (!std::is_scalar<node_t>::value) {
     for (size_t i = 0; i < seed.numel(); ++i) {
       sampled_nodes.push_back({i, seed_data[i]});
       mappers[i].curr = i;
       mappers[i].insert({i, seed_data[i]});
     }
-
-    if (seed_time.has_value()) {
-      const auto seed_time_data = seed_time.value().data_ptr<scalar_t>();
-      for (size_t i = 0; i < seed.numel(); ++i) {
-        seed_times.push_back(seed_time_data[i]);
-      }
-    } else if (time.has_value()) {
-      const auto time_data = time.value().data_ptr<scalar_t>();
-      for (size_t i = 0; i < seed.numel(); ++i) {
-        seed_times.push_back(time_data[seed_data[i]]);
-      }
+  }
+  if (seed_time.has_value()) {
+    const auto seed_time_data = seed_time.value().data_ptr<scalar_t>();
+    for (size_t i = 0; i < seed.numel(); ++i) {
+      seed_times.push_back(seed_time_data[i]);
+    }
+  } else if (time.has_value()) {
+    const auto time_data = time.value().data_ptr<scalar_t>();
+    for (size_t i = 0; i < seed.numel(); ++i) {
+      seed_times.push_back(time_data[seed_data[i]]);
     }
   }
 
@@ -424,6 +491,7 @@ sample(const at::Tensor& rowptr,
   // std::cout<<"threads_ranges="<<threads_ranges<<std::endl;
 
   size_t begin = 0, end = seed.size(0);
+
   for (size_t ell = 0; ell < num_neighbors.size(); ++ell) {
     const auto count = num_neighbors[ell];
 
@@ -450,7 +518,7 @@ sample(const at::Tensor& rowptr,
               /*global_src_node=*/sampled_nodes[i],
               /*local_src_node=*/i, count, mappers[batch_id], generator,
               /*out_global_dst_nodes=*/subgraph_sampled_nodes[batch_id],
-              node_counter);
+              &node_counter);
         }
       } else if constexpr (!std::is_scalar<node_t>::value) {  // Temporal:
         const auto time_data = time.value().data_ptr<temporal_t>();
@@ -462,7 +530,7 @@ sample(const at::Tensor& rowptr,
               /*local_src_node=*/i, count, seed_times[batch_id], time_data,
               mappers[batch_id], generator,
               /*out_global_dst_nodes=*/subgraph_sampled_nodes[batch_id],
-              node_counter);
+              &node_counter);
         }
       }
     }
@@ -563,16 +631,77 @@ sample(const at::Tensor& rowptr,
     // std::cout<<"threads_ranges_after="<<threads_ranges<<std::endl;
   }
 
-  out_node_id = pyg::utils::from_vector(sampled_nodes);
-  // std::cout<<"sampled_nodes="<<sampled_nodes<<std::endl;
+  // return sampled_nodes;
+}
 
-  TORCH_CHECK(directed, "Undirected subgraphs not yet supported");
-  if (directed) {
-    std::tie(out_row, out_col, out_edge_id) = sampler.get_sampled_edges(csc);
-  } else {
-    TORCH_CHECK(!disjoint, "Disjoint subgraphs not yet supported");
+// Homogeneous neighbor sampling
+/////////////////////////////////////////////////
+
+template <bool replace, bool directed, bool disjoint, bool return_edge_id>
+std::tuple<at::Tensor, at::Tensor, at::Tensor, c10::optional<at::Tensor>>
+sample(const at::Tensor& rowptr,
+       const at::Tensor& col,
+       const at::Tensor& seed,
+       const std::vector<int64_t>& num_neighbors,
+       const c10::optional<at::Tensor>& time,
+       const c10::optional<at::Tensor>& seed_time,
+       const bool csc,
+       const std::string temporal_strategy) {
+  TORCH_CHECK(!time.has_value() || disjoint,
+              "Temporal sampling needs to create disjoint subgraphs");
+
+  TORCH_CHECK(rowptr.is_contiguous(), "Non-contiguous 'rowptr'");
+  TORCH_CHECK(col.is_contiguous(), "Non-contiguous 'col'");
+  TORCH_CHECK(seed.is_contiguous(), "Non-contiguous 'seed'");
+  if (time.has_value()) {
+    TORCH_CHECK(time.value().is_contiguous(), "Non-contiguous 'time'");
   }
-  // });
+  if (seed_time.has_value()) {
+    TORCH_CHECK(seed_time.value().is_contiguous(),
+                "Non-contiguous 'seed_time'");
+  }
+
+  at::Tensor out_row, out_col, out_node_id;
+  c10::optional<at::Tensor> out_edge_id = c10::nullopt;
+
+  AT_DISPATCH_INTEGRAL_TYPES(seed.scalar_type(), "sample_kernel", [&] {
+    using scalar_t = int64_t;
+    typedef std::pair<scalar_t, scalar_t> pair_scalar_t;
+    typedef std::conditional_t<!disjoint, scalar_t, pair_scalar_t> node_t;
+    typedef int64_t temporal_t;
+    typedef NeighborSampler<node_t, scalar_t, temporal_t, replace, directed,
+                            return_edge_id>
+        NeighborSamplerImpl;
+
+    std::vector<node_t> sampled_nodes;
+    auto sampler =
+        NeighborSamplerImpl(rowptr.data_ptr<scalar_t>(),
+                            col.data_ptr<scalar_t>(), temporal_strategy);
+
+    const bool parallel =
+        disjoint && omp_get_max_threads() > 1 && num_neighbors.size() > 1;
+    if (!parallel) {
+      sample_seq<node_t, scalar_t, temporal_t, NeighborSamplerImpl, replace,
+                 directed, disjoint, return_edge_id>(
+          sampler, sampled_nodes, rowptr, col, seed, num_neighbors, time,
+          seed_time, csc, temporal_strategy);
+    } else {
+      sample_parallel<node_t, scalar_t, temporal_t, NeighborSamplerImpl,
+                      replace, directed, disjoint, return_edge_id>(
+          sampler, sampled_nodes, rowptr, col, seed, num_neighbors, time,
+          seed_time, csc, temporal_strategy);
+    }
+
+    out_node_id = pyg::utils::from_vector(sampled_nodes);
+
+    TORCH_CHECK(directed, "Undirected subgraphs not yet supported");
+    if (directed) {
+      std::tie(out_row, out_col, out_edge_id) = sampler.get_sampled_edges(csc);
+    } else {
+      TORCH_CHECK(!disjoint, "Disjoint subgraphs not yet supported");
+    }
+  });
+
   return std::make_tuple(out_row, out_col, out_node_id, out_edge_id);
 }
 
