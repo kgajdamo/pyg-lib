@@ -139,10 +139,10 @@ class NeighborSampler {
   }
 
   void fill_sampled_cols(Mapper<node_t, scalar_t>& mapper,
-                         const int tid,
                          int& node_counter,
                          int& curr,
                          const int sampled_num_thread) {
+    const int tid = omp_get_thread_num();
     for (const auto& resampled : mapper.resampled_map) {
       for (node_counter; node_counter < resampled.first; node_counter++) {
         sampled_cols_[sampled_id_offset_ + threads_offsets_[tid] +
@@ -465,7 +465,7 @@ void sample_parallel(NeighborSamplerImpl& sampler,
     }
   }
 
-  const int requested_num_threads = omp_get_max_threads();
+  const int requested_num_threads = 32;
   // std::cout<<"requested_num_threads="<<requested_num_threads<<std::endl;
   int num_threads = requested_num_threads;
   if (requested_num_threads >= seed.size(0)) {
@@ -533,42 +533,45 @@ void sample_parallel(NeighborSamplerImpl& sampler,
               &node_counter);
         }
       }
-    }
-    // for (int m=0; m<mappers.size(); m++) {
-    //   std::cout<<"resampled"<<std::endl;
-    //   std::cout<<"batch_id="<<m<<std::endl;
-    //       for (auto &x: mappers[m].resampled_map) {
-    //         std::cout<<x.first<<" "<<x.second;
-    //       }
-    //       std::cout<<std::endl;
-    //     }
+      // }
+      // for (int m=0; m<mappers.size(); m++) {
+      //   std::cout<<"resampled"<<std::endl;
+      //   std::cout<<"batch_id="<<m<<std::endl;
+      //       for (auto &x: mappers[m].resampled_map) {
+      //         std::cout<<x.first<<" "<<x.second;
+      //       }
+      //       std::cout<<std::endl;
+      //     }
 
-    // for (int m=0; m<mappers.size(); m++) {
-    //   std::cout<<"to_local_map"<<std::endl;
-    //   std::cout<<"batch_id="<<m<<std::endl;
-    //       for (auto &x: mappers[m].to_local_map) {
-    //         std::cout<<x.first<<" "<<x.second;
-    //       }
-    //       std::cout<<std::endl;
-    //     }
+      // for (int m=0; m<mappers.size(); m++) {
+      //   std::cout<<"to_local_map"<<std::endl;
+      //   std::cout<<"batch_id="<<m<<std::endl;
+      //       for (auto &x: mappers[m].to_local_map) {
+      //         std::cout<<x.first<<" "<<x.second;
+      //       }
+      //       std::cout<<std::endl;
+      //     }
 
-    // for (int m=0; m<subgraph_sampled_nodes.size(); m++) {
-    //   std::cout<<"subgraph_sampled_nodes"<<std::endl;
-    //   std::cout<<"batch_id="<<m<<std::endl;
-    //   std::cout<<subgraph_sampled_nodes[m]<<std::endl;
-    // }
+      // for (int m=0; m<subgraph_sampled_nodes.size(); m++) {
+      //   std::cout<<"subgraph_sampled_nodes"<<std::endl;
+      //   std::cout<<"batch_id="<<m<<std::endl;
+      //   std::cout<<subgraph_sampled_nodes[m]<<std::endl;
+      // }
 
-    std::vector<int> sampled_num_by_prev_subgraphs{0};
-    for (int batch_id = 1; batch_id < mappers.size(); batch_id++) {
-      sampled_num_by_prev_subgraphs.push_back(
-          sampled_num_by_prev_subgraphs[batch_id - 1] +
-          subgraph_sampled_nodes[batch_id - 1].size());
-    }
+      std::vector<int> sampled_num_by_prev_subgraphs{0};
+#pragma omp single
+      {
+        for (int batch_id = 1; batch_id < mappers.size(); batch_id++) {
+          sampled_num_by_prev_subgraphs.push_back(
+              sampled_num_by_prev_subgraphs[batch_id - 1] +
+              subgraph_sampled_nodes[batch_id - 1].size());
+        }
+      }
 // std::cout<<"sampled_num_by_prev_subgraphs="<<sampled_num_by_prev_subgraphs<<std::endl;
 
 // update local_map values
-#pragma omp parallel num_threads(num_threads)
-    {
+// #pragma omp parallel num_threads(num_threads)
+//     {
 #pragma omp for
       for (auto batch_id = 0; batch_id < mappers.size(); batch_id++) {
         mappers[batch_id].update_local_val(
@@ -585,10 +588,8 @@ void sample_parallel(NeighborSamplerImpl& sampler,
       //     }
       // std::cout<<"after update locaal="<<std::endl;
 
-      int node_counter = 0;
+      node_counter = 0;
       int sampled_num_thread = 0;
-
-      const int tid = omp_get_thread_num();
       int curr = 0;
 
 #pragma omp for schedule(static, seeds_per_thread)
@@ -601,7 +602,7 @@ void sample_parallel(NeighborSamplerImpl& sampler,
         // std::string printit = "tid="+std::to_string(tid)+",
         // sampled_num_thread=" + std::to_string(sampled_num_thread)+"\n";
         // std::cout<<printit;
-        sampler.fill_sampled_cols(mappers[batch_id], tid, node_counter, curr,
+        sampler.fill_sampled_cols(mappers[batch_id], node_counter, curr,
                                   sampled_num_thread);
       }
     }

@@ -33,7 +33,7 @@ argparser.add_argument(
     type=ast.literal_eval,
     default=[
         # [2, 2],
-        [-1],
+        # [-1],
         [15, 10, 5],
         [20, 15, 10],
     ])
