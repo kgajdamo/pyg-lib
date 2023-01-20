@@ -40,18 +40,8 @@ class Mapper {
   }
 
   std::pair<scalar_t, bool> insert(const node_t& node, int thread_counter) {
-    std::pair<scalar_t, bool> res;
-    if (use_vec) {
-      if constexpr (std::is_scalar<node_t>::value) {
-        auto old = to_local_vec[node];
-        res = std::pair<scalar_t, bool>(old == -1 ? curr : old, old == -1);
-        if (res.second)
-          to_local_vec[node] = curr;
-      }
-    } else {
-      auto out = to_local_map.insert({node, curr});
-      res = std::pair<scalar_t, bool>(out.first->second, out.second);
-    }
+    auto out = to_local_map.insert({node, curr});
+    auto res = std::pair<scalar_t, bool>(out.first->second, out.second);
     if (res.second) {
       ++curr;
     } else {
@@ -75,10 +65,7 @@ class Mapper {
     }
     if (res.second) {
       ++curr;
-    } else {
-      resampled_map.insert({sampled_num, node});
     }
-    ++sampled_num;
     return res;
   }
 
@@ -111,15 +98,16 @@ class Mapper {
     }
   }
 
-  void update_local_val(size_t sampled_nodes_size, int sampled_num_by_prev_mappers, int curr_in_layer) {
-    // iterate over local ids of nodes
-    for (int i = curr - 1; i>=curr-curr_in_layer; i--) {
-      auto it = std::find_if(to_local_map.begin(), to_local_map.end(),
-                           [i](auto&& p) { return p.second == i; });
-      if (it == to_local_map.end())
-          return; // raise an error?
-      
-      it->second += sampled_nodes_size - curr + curr_in_layer + sampled_num_by_prev_mappers;
+  void update_local_val(size_t sampled_nodes_size,
+                        int sampled_num_by_prev_subgraphs,
+                        std::vector<node_t>& subgraph_sampled_nodes) {
+    // iterate over sampled nodes to update their local values
+    for (const auto& sampled_node : subgraph_sampled_nodes) {
+      const auto search = to_local_map.find(sampled_node);
+      if (search != to_local_map.end())
+        search->second += sampled_nodes_size - curr +
+                          subgraph_sampled_nodes.size() +
+                          sampled_num_by_prev_subgraphs;
     }
   }
 
@@ -128,12 +116,11 @@ class Mapper {
 
   bool use_vec;
   std::vector<scalar_t> to_local_vec;
-  
-public:
-scalar_t curr = 0;
-phmap::flat_hash_map<node_t, scalar_t> to_local_map;
-phmap::btree_map<int, node_t> resampled_map;
-int sampled_num = 0;
+
+ public:
+  scalar_t curr = 0;
+  phmap::flat_hash_map<node_t, scalar_t> to_local_map;
+  phmap::btree_map<int, node_t> resampled_map;
 };
 
 }  // namespace sampler
