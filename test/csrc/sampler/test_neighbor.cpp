@@ -5,6 +5,8 @@
 #include "pyg_lib/csrc/utils/types.h"
 #include "test/csrc/graph.h"
 
+#include <stdio.h>
+
 TEST(FullNeighborTest, BasicAssertions) {
   auto options = at::TensorOptions().dtype(at::kLong);
 
@@ -78,6 +80,7 @@ TEST(DisjointNeighborTest, BasicAssertions) {
   auto graph = cycle_graph(/*num_nodes=*/6, options);
   auto seed = at::arange(2, 4, options);
   std::vector<int64_t> num_neighbors = {2, 2};
+  std::cout<<"seed="<<seed<<std::endl;
 
   auto out = pyg::sampler::neighbor_sample(
       /*rowptr=*/std::get<0>(graph),

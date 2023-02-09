@@ -107,8 +107,6 @@ class NeighborSampler {
     if (temporal_strategy_ == "last") {
       row_start = std::max(row_start, (scalar_t)(row_end - count));
     }
-    // std::string printit = "new row_start="+std::to_string(row_start)+" new
-    // row end="+std::to_string(row_end)+"\n"; std::cout<<printit;
 
     if (row_end - row_start > 1) {
       TORCH_CHECK(time[col_[row_start]] <= time[col_[row_end - 1]],
@@ -123,7 +121,7 @@ class NeighborSampler {
   get_sampled_edges(bool csc = false) {
     TORCH_CHECK(save_edges, "No edges have been stored")
     // std::cout<<"sampled_rows_="<<sampled_rows_<<std::endl;
-    // std::cout<<"sampled_cols_="<<sampled_cols_<<std::endl;
+    std::cout<<"sampled_cols_="<<sampled_cols_<<std::endl;
     const auto row = pyg::utils::from_vector(sampled_rows_);
     const auto col = pyg::utils::from_vector(sampled_cols_);
     c10::optional<at::Tensor> edge_id = c10::nullopt;
@@ -335,6 +333,7 @@ class NeighborSampler {
   const scalar_t* rowptr_;
   const scalar_t* col_;
   const std::string temporal_strategy_;
+public:
   std::vector<scalar_t> sampled_cols_;
   std::vector<scalar_t> sampled_rows_;
   std::vector<scalar_t> sampled_edge_ids_;
@@ -465,22 +464,16 @@ void sample_parallel(NeighborSamplerImpl& sampler,
     }
   }
 
-  const int requested_num_threads = 32;
+  // NAPISAĆ TEST SPRAWDZAJĄCY POPRAWNOŚĆ WYNIKU, PORÓWNUJĄCY WYNIKI PARALLEL I SEQ
+  const int requested_num_threads = omp_get_max_threads();
   // std::cout<<"requested_num_threads="<<requested_num_threads<<std::endl;
-  int num_threads = requested_num_threads;
-  if (requested_num_threads >= seed.size(0)) {
-    num_threads = seed.size(0);
-  } else if (seed.size(0) % requested_num_threads != 0) {
-    int chunk_size = seed.size(0) / requested_num_threads + 1;
-    num_threads = seed.size(0) / chunk_size + 1;
-  }
-  // std::cout<<"num_threads="<<num_threads<<std::endl;
+  int num_threads = requested_num_threads >= seed.size(0) ? seed.size(0) : requested_num_threads;
+  std::cout<<"num_threads="<<num_threads<<std::endl;
 
-  // const int seeds_per_thread = seed.size(0) / num_threads;
   const int seeds_per_thread = seed.size(0) % num_threads == 0
                                    ? seed.size(0) / num_threads
                                    : seed.size(0) / num_threads + 1;
-  // std::cout<<"seeds_per_thread="<<seeds_per_thread<<std::endl;
+  std::cout<<"seeds_per_thread="<<seeds_per_thread<<std::endl;
 
   std::vector<int> threads_ranges;
   for (auto tid = 0; tid < num_threads; tid++) {
@@ -506,8 +499,6 @@ void sample_parallel(NeighborSamplerImpl& sampler,
       const int tid = omp_get_thread_num();
       int node_counter = 0;
       int batch_id = 0;
-      // std::string printit = "tid="+std::to_string(tid) +"\n";
-      // std::cout<<printit;
 
       if (!time.has_value()) {
         for (auto i = threads_ranges[tid]; i < threads_ranges[tid + 1]; i++) {
@@ -534,14 +525,14 @@ void sample_parallel(NeighborSamplerImpl& sampler,
         }
       }
       // }
-      // for (int m=0; m<mappers.size(); m++) {
-      //   std::cout<<"resampled"<<std::endl;
-      //   std::cout<<"batch_id="<<m<<std::endl;
-      //       for (auto &x: mappers[m].resampled_map) {
-      //         std::cout<<x.first<<" "<<x.second;
-      //       }
-      //       std::cout<<std::endl;
-      //     }
+      for (int m=0; m<mappers.size(); m++) {
+        std::cout<<"resampled"<<std::endl;
+        std::cout<<"batch_id="<<m<<std::endl;
+            for (auto &x: mappers[m].resampled_map) {
+              std::cout<<x.first<<" "<<x.second;
+            }
+            std::cout<<std::endl;
+          }
 
       // for (int m=0; m<mappers.size(); m++) {
       //   std::cout<<"to_local_map"<<std::endl;
@@ -567,7 +558,6 @@ void sample_parallel(NeighborSamplerImpl& sampler,
               subgraph_sampled_nodes[batch_id - 1].size());
         }
       }
-// std::cout<<"sampled_num_by_prev_subgraphs="<<sampled_num_by_prev_subgraphs<<std::endl;
 
 // update local_map values
 // #pragma omp parallel num_threads(num_threads)
@@ -578,15 +568,6 @@ void sample_parallel(NeighborSamplerImpl& sampler,
             sampled_nodes.size(), sampled_num_by_prev_subgraphs[batch_id],
             subgraph_sampled_nodes[batch_id]);
       }
-      // for (int m=0; m<mappers.size(); m++) {
-      //   std::cout<<"to_local_map after"<<std::endl;
-      //   std::cout<<"batch_id="<<m<<std::endl;
-      //       for (auto &x: mappers[m].to_local_map) {
-      //         std::cout<<x.first<<" "<<x.second<<" ";
-      //       }
-      //       std::cout<<std::endl;
-      //     }
-      // std::cout<<"after update locaal="<<std::endl;
 
       node_counter = 0;
       int sampled_num_thread = 0;
@@ -606,7 +587,16 @@ void sample_parallel(NeighborSamplerImpl& sampler,
                                   sampled_num_thread);
       }
     }
-    //  std::cout<<"sampled_cols="<<sampler.sampled_cols_<<std::endl;
+          for (int m=0; m<mappers.size(); m++) {
+        std::cout<<"to_local_map after"<<std::endl;
+        std::cout<<"batch_id="<<m<<std::endl;
+            for (auto &x: mappers[m].to_local_map) {
+              std::cout<<x.first<<" "<<x.second<<" ";
+            }
+            std::cout<<std::endl;
+          }
+     std::cout<<"sampled_cols="<<sampler.sampled_cols_<<std::endl;
+     std::cout<<"sampled_rows="<<sampler.sampled_rows_<<std::endl;
     for (int i = 0; i < subgraph_sampled_nodes.size(); ++i) {
       std::copy(subgraph_sampled_nodes[i].begin(),
                 subgraph_sampled_nodes[i].end(),
@@ -687,6 +677,7 @@ sample(const at::Tensor& rowptr,
           sampler, sampled_nodes, rowptr, col, seed, num_neighbors, time,
           seed_time, csc, temporal_strategy);
     } else {
+      std::cout<<"parallel"<<std::endl;
       sample_parallel<node_t, scalar_t, temporal_t, NeighborSamplerImpl,
                       replace, directed, disjoint, return_edge_id>(
           sampler, sampled_nodes, rowptr, col, seed, num_neighbors, time,

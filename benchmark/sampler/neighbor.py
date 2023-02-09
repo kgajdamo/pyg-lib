@@ -80,12 +80,6 @@ def test_neighbor(dataset, **kwargs):
     else:
         node_perm = torch.arange(num_nodes)
 
-    if args.write_csv:
-        f = open('./neighbor_benchmark_parallel.csv', 'a', newline='')
-        writer = csv.writer(f)
-        writer.writerow(('num_neighbors', 'batch_size', 'pyg-lib',
-                         f'directed = {args.directed}'))
-
     for num_neighbors in args.num_neighbors:
         for batch_size in args.batch_sizes:
             print(f'batch_size={batch_size}, num_neighbors={num_neighbors}):')
@@ -140,7 +134,7 @@ def test_neighbor(dataset, **kwargs):
             # print(f'         dgl={dgl_duration:.3f} seconds')
             print()
             pyg_lib_duration_coma = str(pyg_lib_duration).replace('.', ',')
-            writer.writerow((num_neighbors, batch_size, pyg_lib_duration_coma))
+            # writer.writerow((num_neighbors, batch_size, pyg_lib_duration_coma))
     if args.write_csv:
         f.close()
 

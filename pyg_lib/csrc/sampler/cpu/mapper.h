@@ -6,6 +6,21 @@
 #include "parallel_hashmap/btree.h"
 #include "parallel_hashmap/phmap.h"
 
+#include <algorithm>
+#include <iterator>
+
+#include <torch/library.h>
+
+#include "parallel_hashmap/phmap.h"
+
+#include "pyg_lib/csrc/random/cpu/rand_engine.h"
+#include "pyg_lib/csrc/sampler/cpu/index_tracker.h"
+#include "pyg_lib/csrc/sampler/cpu/mapper.h"
+#include "pyg_lib/csrc/sampler/cpu/neighbor_kernel.h"
+#include "pyg_lib/csrc/sampler/subgraph.h"
+#include "pyg_lib/csrc/utils/cpu/convert.h"
+#include "pyg_lib/csrc/utils/types.h"
+
 namespace pyg {
 namespace sampler {
 
@@ -99,13 +114,19 @@ class Mapper {
   void update_local_val(size_t sampled_nodes_size,
                         int sampled_num_by_prev_subgraphs,
                         std::vector<node_t>& subgraph_sampled_nodes) {
+
     // iterate over sampled nodes to update their local values
     for (const auto& sampled_node : subgraph_sampled_nodes) {
       const auto search = to_local_map.find(sampled_node);
-      if (search != to_local_map.end())
+      if (search != to_local_map.end()) {
         search->second += sampled_nodes_size - curr +
                           subgraph_sampled_nodes.size() +
                           sampled_num_by_prev_subgraphs;
+        std::string printit = "search->second=" + std::to_string(search->second) + ", sampled_nodes_size="+std::to_string(sampled_nodes_size)+", curr="+std::to_string(static_cast<int>(curr));//+"subgraph_sampled_nodes.size()"+std::to_string(subgraph_sampled_nodes.size())+" sampled_num_by_prev_subgraphs"+std::to_string(sampled_num_by_prev_subgraphs);
+        // +",
+        // // sampled_num_thread=" + std::to_string(sampled_num_thread)+"\n";
+        std::cout<<printit;
+      }
     }
   }
 
