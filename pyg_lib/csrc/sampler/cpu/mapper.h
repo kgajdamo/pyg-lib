@@ -111,10 +111,9 @@ class Mapper {
     }
   }
 
-  void update_local_val(size_t sampled_nodes_size,
-                        int sampled_num_by_prev_subgraphs,
-                        std::vector<node_t>& subgraph_sampled_nodes) {
-
+  void update_local_vals(size_t sampled_nodes_size,
+                         int sampled_num_by_prev_subgraphs,
+                         std::vector<node_t>& subgraph_sampled_nodes) {
     // iterate over sampled nodes to update their local values
     for (const auto& sampled_node : subgraph_sampled_nodes) {
       const auto search = to_local_map.find(sampled_node);
@@ -122,10 +121,6 @@ class Mapper {
         search->second += sampled_nodes_size - curr +
                           subgraph_sampled_nodes.size() +
                           sampled_num_by_prev_subgraphs;
-        std::string printit = "search->second=" + std::to_string(search->second) + ", sampled_nodes_size="+std::to_string(sampled_nodes_size)+", curr="+std::to_string(static_cast<int>(curr));//+"subgraph_sampled_nodes.size()"+std::to_string(subgraph_sampled_nodes.size())+" sampled_num_by_prev_subgraphs"+std::to_string(sampled_num_by_prev_subgraphs);
-        // +",
-        // // sampled_num_thread=" + std::to_string(sampled_num_thread)+"\n";
-        std::cout<<printit;
       }
     }
   }

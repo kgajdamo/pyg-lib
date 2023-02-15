@@ -80,7 +80,7 @@ TEST(DisjointNeighborTest, BasicAssertions) {
   auto graph = cycle_graph(/*num_nodes=*/6, options);
   auto seed = at::arange(2, 4, options);
   std::vector<int64_t> num_neighbors = {2, 2};
-  std::cout<<"seed="<<seed<<std::endl;
+  std::cout << "seed=" << seed << std::endl;
 
   auto out = pyg::sampler::neighbor_sample(
       /*rowptr=*/std::get<0>(graph),
@@ -92,6 +92,8 @@ TEST(DisjointNeighborTest, BasicAssertions) {
   EXPECT_TRUE(at::equal(std::get<0>(out), expected_row));
   auto expected_col = at::tensor({2, 3, 4, 5, 6, 0, 0, 7, 8, 1, 1, 9}, options);
   EXPECT_TRUE(at::equal(std::get<1>(out), expected_col));
+  std::cout << "out col=" << std::get<1>(out) << std::endl;
+  std::cout << "expected col=" << expected_col << std::endl;
   auto expected_nodes = at::tensor(
       {0, 2, 1, 3, 0, 1, 0, 3, 1, 2, 1, 4, 0, 0, 0, 4, 1, 1, 1, 5}, options);
   EXPECT_TRUE(at::equal(std::get<2>(out), expected_nodes.view({-1, 2})));
@@ -108,10 +110,16 @@ TEST(TemporalNeighborTest, BasicAssertions) {
   auto col = std::get<1>(graph);
   auto seed = at::arange(2, 4, options);
 
+  std::cout << "rowptr=" << rowptr << std::endl;
+  std::cout << "col=" << col << std::endl;
+  std::cout << "seed=" << seed << std::endl;
+
   // Time is equal to node ID ...
   auto time = at::arange(6, options);
+  std::cout << "time=" << time << std::endl;
   // ... so we need to sort the column vector by time/node ID:
   col = std::get<0>(at::sort(col.view({-1, 2}), /*dim=*/1)).flatten();
+  std::cout << "col=" << col << std::endl;
 
   auto out1 = pyg::sampler::neighbor_sample(
       rowptr, col, seed, /*num_neighbors=*/{2, 2}, /*time=*/time,
@@ -133,6 +141,9 @@ TEST(TemporalNeighborTest, BasicAssertions) {
       rowptr, col, seed, /*num_neighbors=*/{1, 1}, /*time=*/time,
       /*seed_time=*/c10::nullopt, /*csc=*/false, /*replace=*/false,
       /*directed=*/true, /*disjoint=*/true, /*temporal_strategy=*/"last");
+
+  std::cout << "out1=" << std::get<1>(out1) << std::endl;
+  std::cout << "out2=" << std::get<1>(out2) << std::endl;
 
   EXPECT_TRUE(at::equal(std::get<0>(out1), std::get<0>(out2)));
   EXPECT_TRUE(at::equal(std::get<1>(out1), std::get<1>(out2)));
