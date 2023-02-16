@@ -452,13 +452,19 @@ void sample_parallel(NeighborSamplerImpl& sampler,
     }
   }
 
-  const int requested_num_threads = omp_get_max_threads();
-  int num_threads =
-      requested_num_threads >= seed_size ? seed_size : requested_num_threads;
+  const int requested_num_threads = 32;  // omp_get_max_threads();
 
-  const int seeds_per_thread = seed_size % num_threads == 0
-                                   ? seed_size / num_threads
-                                   : seed_size / num_threads + 1;
+  int seeds_per_thread, num_threads; // do funkcji
+  if (requested_num_threads >= seed_size) {
+    seeds_per_thread = 1;
+    num_threads = seed_size;
+  } else if (seed_size % requested_num_threads == 0) {
+    seeds_per_thread = seed_size / requested_num_threads;
+    num_threads = requested_num_threads;
+  } else {
+    seeds_per_thread = seed_size / requested_num_threads + 1;
+    num_threads = requested_num_threads + 1;
+  }
 
   std::vector<int> threads_ranges;
   for (auto tid = 0; tid < num_threads; tid++) {
