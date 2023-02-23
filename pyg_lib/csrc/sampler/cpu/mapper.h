@@ -1,8 +1,25 @@
 #pragma once
 
 #include <ATen/ATen.h>
+#include <omp.h>
+
+#include "parallel_hashmap/btree.h"
+#include "parallel_hashmap/phmap.h"
+
+#include <algorithm>
+#include <iterator>
+
+#include <torch/library.h>
 
 #include "parallel_hashmap/phmap.h"
+
+#include "pyg_lib/csrc/random/cpu/rand_engine.h"
+#include "pyg_lib/csrc/sampler/cpu/index_tracker.h"
+#include "pyg_lib/csrc/sampler/cpu/mapper.h"
+#include "pyg_lib/csrc/sampler/cpu/neighbor_kernel.h"
+#include "pyg_lib/csrc/sampler/subgraph.h"
+#include "pyg_lib/csrc/utils/cpu/convert.h"
+#include "pyg_lib/csrc/utils/types.h"
 
 namespace pyg {
 namespace sampler {
@@ -35,6 +52,17 @@ class Mapper {
     }
   }
 
+  std::pair<scalar_t, bool> insert(const node_t& node, int thread_counter) {
+    auto out = to_local_map.insert({node, curr});
+    auto res = std::pair<scalar_t, bool>(out.first->second, out.second);
+    if (res.second) {
+      ++curr;
+    } else {
+      resampled_map.insert({thread_counter, node});
+    }
+    return res;
+  }
+
   std::pair<scalar_t, bool> insert(const node_t& node) {
     std::pair<scalar_t, bool> res;
     if (use_vec) {
@@ -49,7 +77,7 @@ class Mapper {
       res = std::pair<scalar_t, bool>(out.first->second, out.second);
     }
     if (res.second) {
-      curr++;
+      ++curr;
     }
     return res;
   }
@@ -74,20 +102,40 @@ class Mapper {
 
   scalar_t map(const node_t& node) {
     if (use_vec) {
-      return to_local_vec[node];
+      if constexpr (std::is_scalar<node_t>::value) {
+        return to_local_vec[node];
+      }
     } else {
       const auto search = to_local_map.find(node);
       return search != to_local_map.end() ? search->second : -1;
     }
   }
 
+  void update_local_vals(size_t sampled_nodes_size,
+                         int sampled_num_by_prev_subgraphs,
+                         std::vector<node_t>& subgraph_sampled_nodes) {
+    // iterate over sampled nodes to update their local values
+    for (const auto& sampled_node : subgraph_sampled_nodes) {
+      const auto search = to_local_map.find(sampled_node);
+      if (search != to_local_map.end()) {
+        search->second += sampled_nodes_size - curr +
+                          subgraph_sampled_nodes.size() +
+                          sampled_num_by_prev_subgraphs;
+      }
+    }
+  }
+
  private:
   const size_t num_nodes, num_entries;
-  scalar_t curr = 0;
 
   bool use_vec;
   std::vector<scalar_t> to_local_vec;
+
+ public:
+  scalar_t curr = 0;
   phmap::flat_hash_map<node_t, scalar_t> to_local_map;
+  phmap::btree_map<int, node_t> resampled_map;
+  // std::vector<scalar_t> sampled_num_by_prev_subgraphs{0};
 };
 
 }  // namespace sampler
