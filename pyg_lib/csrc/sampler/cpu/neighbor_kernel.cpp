@@ -452,19 +452,19 @@ void sample_parallel(NeighborSamplerImpl& sampler,
     }
   }
 
-  const int requested_num_threads = 32;  // omp_get_max_threads();
+  const int requested_num_threads = omp_get_max_threads();
 
-  int seeds_per_thread, num_threads; // do funkcji
-  if (requested_num_threads >= seed_size) {
-    seeds_per_thread = 1;
-    num_threads = seed_size;
-  } else if (seed_size % requested_num_threads == 0) {
-    seeds_per_thread = seed_size / requested_num_threads;
-    num_threads = requested_num_threads;
-  } else {
-    seeds_per_thread = seed_size / requested_num_threads + 1;
-    num_threads = requested_num_threads + 1;
-  }
+  int num_threads = requested_num_threads;
+   if (requested_num_threads >= seed.size(0)) {
+     num_threads = seed.size(0);
+   } else if (seed.size(0) % requested_num_threads != 0) {
+     int chunk_size = seed.size(0) / requested_num_threads + 1;
+     num_threads = seed.size(0) / chunk_size + 1;
+   }
+
+   const int seeds_per_thread = seed.size(0) % num_threads == 0
+                                    ? seed.size(0) / num_threads
+                                    : seed.size(0) / num_threads + 1;
 
   std::vector<int> threads_ranges;
   for (auto tid = 0; tid < num_threads; tid++) {
@@ -475,6 +475,7 @@ void sample_parallel(NeighborSamplerImpl& sampler,
 
   size_t begin = 0, end = seed_size;
 
+  omp_set_num_threads(num_threads);
   for (size_t ell = 0; ell < num_neighbors.size(); ++ell) {
     const auto count = num_neighbors[ell];
 
@@ -483,7 +484,6 @@ void sample_parallel(NeighborSamplerImpl& sampler,
                                count, num_threads, threads_ranges);
     std::vector<std::vector<node_t>> subgraph_sampled_nodes(seed_size);
 
-    omp_set_num_threads(num_threads);
 #pragma omp parallel num_threads(num_threads)
     {
       const int tid = omp_get_thread_num();
