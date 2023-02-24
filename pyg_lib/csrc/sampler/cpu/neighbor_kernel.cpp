@@ -484,7 +484,9 @@ void sample_parallel(NeighborSamplerImpl& sampler,
                                count, num_threads, threads_ranges);
     std::vector<std::vector<node_t>> subgraph_sampled_nodes(seed_size);
 
-#pragma omp parallel num_threads(num_threads)
+    std::vector<int> sampled_num_by_prev_subgraphs{0};
+
+#pragma omp parallel num_threads(num_threads) shared(sampled_num_by_prev_subgraphs)
     {
       const int tid = omp_get_thread_num();
       int node_counter = 0;
@@ -514,16 +516,16 @@ void sample_parallel(NeighborSamplerImpl& sampler,
               &node_counter);
         }
       }
-    }
-    std::vector<int> sampled_num_by_prev_subgraphs{0};
+
+#pragma omp single
+{
     for (int batch_id = 1; batch_id < seed_size; batch_id++) {
       sampled_num_by_prev_subgraphs.push_back(
           sampled_num_by_prev_subgraphs[batch_id - 1] +
           subgraph_sampled_nodes[batch_id - 1].size());
     }
+}
 
-#pragma omp parallel num_threads(num_threads)
-    {
 // update local_map values
 #pragma omp for
       for (auto batch_id = 0; batch_id < seed_size; batch_id++) {
@@ -532,7 +534,7 @@ void sample_parallel(NeighborSamplerImpl& sampler,
             subgraph_sampled_nodes[batch_id]);
       }
 
-      int node_counter = 0;
+      node_counter = 0;
       int sampled_num_thread = 0;
       int curr = 0;
 
