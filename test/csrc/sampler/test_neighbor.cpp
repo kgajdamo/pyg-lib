@@ -160,6 +160,12 @@ TEST(HeteroNeighborTest, BasicAssertions) {
       node_types, edge_types, rowptr_dict, col_dict, seed_dict,
       num_neighbors_dict);
 
+  std::cout << "row=" << std::get<0>(out).at(rel_key) << std::endl;
+  std::cout << "col=" << std::get<1>(out).at(rel_key) << std::endl;
+  std::cout << "nodes=" << std::get<2>(out).at(node_key) << std::endl;
+  std::cout << "edges=" << std::get<3>(out).value().at(rel_key) << std::endl;
+
+
   auto expected_row = at::tensor({0, 0, 1, 1, 2, 2, 3, 3}, options);
   EXPECT_TRUE(at::equal(std::get<0>(out).at(rel_key), expected_row));
   auto expected_col = at::tensor({2, 1, 0, 3, 4, 0, 1, 5}, options);

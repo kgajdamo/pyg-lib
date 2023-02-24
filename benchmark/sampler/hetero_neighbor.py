@@ -27,6 +27,7 @@ argparser.add_argument('--batch-sizes', nargs='+', type=int, default=[
 argparser.add_argument('--disjoint', action='store_true')
 argparser.add_argument('--num_neighbors', type=ast.literal_eval, default=[
     [-1],
+    # [2, 2],
     [15, 10, 5],
     [20, 15, 10],
 ])
@@ -77,7 +78,7 @@ def test_hetero_neighbor(dataset, **kwargs):
 
         if 'pyg-lib' in args.libraries:
             t = time.perf_counter()
-            for seed in tqdm(node_perm.split(batch_size)[:20]):
+            for seed in tqdm(node_perm.split(batch_size)):
                 seed_dict = {'paper': seed}
                 pyg_lib.sampler.hetero_neighbor_sample(
                     colptr_dict,
@@ -97,38 +98,27 @@ def test_hetero_neighbor(dataset, **kwargs):
             data['pyg-lib'].append(round(pyg_lib_duration, 3))
             print(f'     pyg-lib={pyg_lib_duration:.3f} seconds')
 
-        if not args.disjoint:
-            if 'torch-sparse' in args.libraries:
-                t = time.perf_counter()
-                for seed in tqdm(node_perm.split(batch_size)[:20]):
-                    node_types = list(num_nodes_dict.keys())
-                    edge_types = list(colptr_dict.keys())
-                    colptr_dict_sparse = remap_keys(colptr_dict)
-                    row_dict_sparse = remap_keys(row_dict)
-                    seed_dict = {'paper': seed}
-                    num_neighbors_dict_sparse = remap_keys(num_neighbors_dict)
-                    num_hops = max([len(v) for v in [num_neighbors]])
-                    torch.ops.torch_sparse.hetero_neighbor_sample(
-                        node_types,
-                        edge_types,
-                        colptr_dict_sparse,
-                        row_dict_sparse,
-                        seed_dict,
-                        num_neighbors_dict_sparse,
-                        num_hops,
-                        False,  # replace
-                        True,  # directed
-                    )
-                torch_sparse_duration = time.perf_counter() - t
-                data['torch-sparse'].append(round(torch_sparse_duration, 3))
-                print(f'torch-sparse={torch_sparse_duration:.3f} seconds')
-
-            # TODO (kgajdamo): Add dgl hetero sampler.
-        print()
-
-    if args.write_csv:
-        df = pd.DataFrame(data)
-        df.to_csv(f'hetero_neighbor{datetime.now()}.csv', index=False)
+            # t = time.perf_counter()
+            # for seed in tqdm(node_perm.split(batch_size)[:20]):
+            #     node_types = list(num_nodes_dict.keys())
+            #     edge_types = list(colptr_dict.keys())
+            #     colptr_dict_sparse = remap_keys(colptr_dict)
+            #     row_dict_sparse = remap_keys(row_dict)
+            #     seed_dict = {'paper': seed}
+            #     num_neighbors_dict_sparse = remap_keys(num_neighbors_dict)
+            #     num_hops = max([len(v) for v in [num_neighbors]])
+            #     torch.ops.torch_sparse.hetero_neighbor_sample(
+            #         node_types,
+            #         edge_types,
+            #         colptr_dict_sparse,
+            #         row_dict_sparse,
+            #         seed_dict,
+            #         num_neighbors_dict_sparse,
+            #         num_hops,
+            #         False,  # replace
+            #         True,  # directed
+            #     )
+            # torch_sparse_duration = time.perf_counter() - t
 
 
 if __name__ == '__main__':

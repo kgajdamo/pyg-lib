@@ -13,6 +13,7 @@ import pyg_lib
 from pyg_lib.testing import withDataset, withSeed
 
 argparser = argparse.ArgumentParser()
+<<<<<<< Updated upstream
 argparser.add_argument('--batch-sizes', nargs='+', type=int, default=[
     512,
     1024,
@@ -27,6 +28,31 @@ argparser.add_argument('--num_neighbors', type=ast.literal_eval, default=[
     [15, 10, 5],
     [20, 15, 10],
 ])
+=======
+argparser.add_argument(
+    '--batch-sizes',
+    nargs='+',
+    type=int,
+    default=[
+        # 8,
+        512,
+        1024,
+        2048,
+        4096,
+        8192,
+    ])
+argparser.add_argument('--directed', action='store_true')
+argparser.add_argument('--disjoint', action='store_true')
+argparser.add_argument(
+    '--num_neighbors',
+    type=ast.literal_eval,
+    default=[
+        # [2, 2],
+        # [-1],
+        [15, 10, 5],
+        [20, 15, 10],
+    ])
+>>>>>>> Stashed changes
 argparser.add_argument('--replace', action='store_true')
 argparser.add_argument('--shuffle', action='store_true')
 argparser.add_argument('--temporal', action='store_true')
@@ -86,6 +112,16 @@ def test_neighbor(dataset, **kwargs):
                     temporal_strategy=args.temporal_strategy,
                     return_edge_id=True,
                 )
+<<<<<<< Updated upstream
+=======
+                # rowo, colo, nodeo, edgeo, batcho = out + (None, )
+                # print("row=")
+                # print(rowo)
+                # print("col=")
+                # print(colo)
+                # print("node=")
+                # print(nodeo)
+>>>>>>> Stashed changes
             pyg_lib_duration = time.perf_counter() - t
             data['pyg-lib'].append(round(pyg_lib_duration, 3))
             print(f'     pyg-lib={pyg_lib_duration:.3f} seconds')
