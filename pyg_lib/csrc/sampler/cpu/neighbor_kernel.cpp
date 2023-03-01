@@ -20,6 +20,62 @@ namespace sampler {
 
 namespace {
 
+// Multithreading utils
+template <typename node_t>
+class MTUtils {
+ public:
+  MTUtils(const int seed_size) : seed_size(seed_size) {
+      const int requested_num_threads = 32;
+      if (requested_num_threads >= seed_size) {
+        seeds_per_thread = 1;
+        num = seed_size;
+      } else if (seed_size % requested_num_threads != 0) {
+        seeds_per_thread = seed_size / requested_num_threads + 1;
+        num = seed_size / seeds_per_thread + 1;
+      } else {
+        seeds_per_thread = seed_size / requested_num_threads;
+        num = requested_num_threads;
+      }
+
+      // 2. Each thread is assigned a set of nodes for which it looks for
+      // neighbors.
+      for (auto tid = 0; tid < num; tid++) {
+        scope.push_back(tid * seeds_per_thread);
+      }
+      scope.push_back(
+        std::min(num * seeds_per_thread, seed_size));
+      
+      omp_set_num_threads(num);
+  }
+
+  void set_scope(
+      std::vector<std::vector<node_t>>& subgraph_sampled_nodes,
+      const size_t begin) {
+    // This function purpose is to calculate the nodes range for each thread
+    // for the next layer based on the number of sampled nodes in the current
+    // layer.
+    int batch_id = 0;
+    int batch_id_end = seeds_per_thread;
+    scope[0] = begin;
+
+    for (int t = 1; t < scope.size(); t++) {
+      scope[t] = scope[t - 1];
+      for (batch_id; batch_id < batch_id_end; batch_id++) {
+        scope[t] += subgraph_sampled_nodes[batch_id].size();
+      }
+      batch_id = batch_id_end;
+      batch_id_end =
+          std::min(batch_id_end + seeds_per_thread, seed_size);
+    }
+  }
+
+  const int seed_size;
+  int num;
+  int seeds_per_thread;
+
+  std::vector<int> scope;
+};
+
 // Helper classes for bipartite neighbor sampling //////////////////////////////
 
 // `node_t` is either a scalar or a pair of scalars (example_id, node_id):
@@ -46,15 +102,15 @@ class NeighborSampler {
                           size_t end,
                           int64_t count,
                           const int num_threads,
-                          std::vector<int>& threads_ranges) {
+                          std::vector<int>& threads_scope) {
     if (!save_edges)
       return;
     threads_offsets_.resize(num_threads + 1);
 
     for (int tid = 1; tid < threads_offsets_.size(); tid++) {
       scalar_t allocation_size = get_allocation_size_(
-          global_src_nodes, seed_times, time, threads_ranges[tid - 1],
-          threads_ranges[tid], count);
+          global_src_nodes, seed_times, time, threads_scope[tid - 1],
+          threads_scope[tid], count);
       threads_offsets_[tid] = threads_offsets_[tid - 1] + allocation_size;
     }
 
@@ -118,8 +174,10 @@ class NeighborSampler {
   void fill_sampled_cols(Mapper<node_t, scalar_t>& mapper,
                          int& node_counter,
                          int& curr,
-                         const int sampled_num_thread) {
+                         const int sampled_num_thread, size_t sub_num) {
     const int tid = omp_get_thread_num();
+    // Keep adding curr values to sampled_cols until encounter a node that
+    // has been re-sampled. Put its index into sampled_cols, and so on.
     for (const auto& resampled : mapper.resampled_map) {
       for (node_counter; node_counter < resampled.first; node_counter++) {
         sampled_cols_[sampled_id_offset_ + threads_offsets_[tid] +
@@ -386,28 +444,6 @@ void sample_seq(NeighborSamplerImpl& sampler,
   }
 }
 
-template <typename node_t, typename scalar_t>
-void set_threads_ranges(
-    std::vector<scalar_t>& threads_ranges,
-    std::vector<std::vector<node_t>>& subgraph_sampled_nodes,
-    const int seeds_per_thread,
-    const size_t begin,
-    const size_t seed_size) {
-  int batch_id = 0;
-  int batch_id_end = seeds_per_thread;
-  threads_ranges[0] = begin;
-
-  for (int t = 1; t < threads_ranges.size(); t++) {
-    threads_ranges[t] = threads_ranges[t - 1];
-    for (batch_id; batch_id < batch_id_end; batch_id++) {
-      threads_ranges[t] += subgraph_sampled_nodes[batch_id].size();
-    }
-    batch_id = batch_id_end;
-    batch_id_end =
-        std::min(batch_id_end + seeds_per_thread, static_cast<int>(seed_size));
-  }
-}
-
 template <typename node_t,
           typename scalar_t,
           typename temporal_t,
@@ -426,10 +462,25 @@ void sample_parallel(NeighborSamplerImpl& sampler,
                      const c10::optional<at::Tensor>& seed_time,
                      const bool csc,
                      const std::string temporal_strategy) {
+  // In order for the sampling to take place in parallel, it is necessary to
+  // ensure that individual threads have their own places in memory, on which
+  // they can operate. Therefore, some modifications had to be made to the
+  // standard disjont flow:
+  // 1. Create separate mappers for each disjoint subgraph.
+  // 2. Each thread is assigned a set of nodes for which it looks for neighbors.
+  // One thread can work on many mappers, but only one thread can work on
+  // one mapper.
+  // 3. After sampling the nodes in a given layer, it is required to update the
+  // local map values so that they match between all mappers.
+  // 4. Finally, fill in the sampled_cols vector based on the updated values in
+  // the mappers.
+
   std::vector<scalar_t> seed_times;
   pyg::random::RandintEngine<scalar_t> generator;
 
   const auto seed_size = seed.size(0);
+
+  // 1. Create separate mappers for each disjoint subgraph
   std::vector<Mapper<node_t, scalar_t>> mappers(
       seed_size, Mapper<node_t, scalar_t>(/*num_nodes=*/rowptr.size(0) - 1));
 
@@ -453,48 +504,28 @@ void sample_parallel(NeighborSamplerImpl& sampler,
     }
   }
 
-  const int requested_num_threads = omp_get_max_threads();
-
-  int num_threads = requested_num_threads;
-   if (requested_num_threads >= seed.size(0)) {
-     num_threads = seed.size(0);
-   } else if (seed.size(0) % requested_num_threads != 0) {
-     int chunk_size = seed.size(0) / requested_num_threads + 1;
-     num_threads = seed.size(0) / chunk_size + 1;
-   }
-
-   const int seeds_per_thread = seed.size(0) % num_threads == 0
-                                    ? seed.size(0) / num_threads
-                                    : seed.size(0) / num_threads + 1;
-
-  std::vector<int> threads_ranges;
-  for (auto tid = 0; tid < num_threads; tid++) {
-    threads_ranges.push_back(tid * seeds_per_thread);
-  }
-  threads_ranges.push_back(
-      std::min(num_threads * seeds_per_thread, static_cast<int>(seed_size)));
+  auto threads = MTUtils<node_t>(static_cast<int>(seed_size));
 
   size_t begin = 0, end = seed_size;
 
-  omp_set_num_threads(num_threads);
   for (size_t ell = 0; ell < num_neighbors.size(); ++ell) {
     const auto count = num_neighbors[ell];
 
     // preparation for going parallel
     sampler.allocate_resources(sampled_nodes, seed_times, time, begin, end,
-                               count, num_threads, threads_ranges);
+                               count, threads.num, threads.scope);
     std::vector<std::vector<node_t>> subgraph_sampled_nodes(seed_size);
 
     std::vector<int> sampled_num_by_prev_subgraphs{0};
 
-#pragma omp parallel num_threads(num_threads) shared(sampled_num_by_prev_subgraphs)
+#pragma omp parallel num_threads(threads.num)
     {
       const int tid = omp_get_thread_num();
       int node_counter = 0;
       int batch_id = 0;
 
       if (!time.has_value()) {
-        for (auto i = threads_ranges[tid]; i < threads_ranges[tid + 1]; i++) {
+        for (auto i = threads.scope[tid]; i < threads.scope[tid + 1]; i++) {
           if constexpr (!std::is_scalar<node_t>::value) {
             batch_id = sampled_nodes[i].first;
           }
@@ -506,7 +537,8 @@ void sample_parallel(NeighborSamplerImpl& sampler,
         }
       } else if constexpr (!std::is_scalar<node_t>::value) {  // Temporal:
         const auto time_data = time.value().data_ptr<temporal_t>();
-        for (auto i = threads_ranges[tid]; i < threads_ranges[tid + 1]; i++) {
+        // Each thread is assigned a set of nodes for which it looks for neighbors.
+        for (auto i = threads.scope[tid]; i < threads.scope[tid + 1]; i++) {
           const auto batch_id = sampled_nodes[i].first;
 
           sampler.temporal_sample(
@@ -518,16 +550,20 @@ void sample_parallel(NeighborSamplerImpl& sampler,
         }
       }
 
+// For each subgraph calculate the number of nodes sampled by all previous
+// subgraphs.
 #pragma omp single
 {
-    for (int batch_id = 1; batch_id < seed_size; batch_id++) {
-      sampled_num_by_prev_subgraphs.push_back(
-          sampled_num_by_prev_subgraphs[batch_id - 1] +
-          subgraph_sampled_nodes[batch_id - 1].size());
-    }
+  for (int batch_id = 1; batch_id < seed_size; batch_id++) {
+    sampled_num_by_prev_subgraphs.push_back(
+        sampled_num_by_prev_subgraphs[batch_id - 1] +
+        subgraph_sampled_nodes[batch_id - 1].size());
+  }
 }
 
-// update local_map values
+// 3. Due to the fact that each subgraph operates on a separate mapper, it is
+// required to update the local map values so that they match between all
+// mappers.
 #pragma omp for
       for (auto batch_id = 0; batch_id < seed_size; batch_id++) {
         mappers[batch_id].update_local_vals(
@@ -539,15 +575,22 @@ void sample_parallel(NeighborSamplerImpl& sampler,
       int sampled_num_thread = 0;
       int curr = 0;
 
-#pragma omp for schedule(static, seeds_per_thread)
+// 4. Fill sampled cols
+#pragma omp for schedule(static, threads.seeds_per_thread)
       for (auto batch_id = 0; batch_id < seed_size; batch_id++) {
-        curr = sampled_num_by_prev_subgraphs[batch_id] +
-               threads_ranges[num_threads];
+        // Initial value of the node index is equal to the sum of all
+        // nodes sampled so far (in previous layers) and the nodes sampled by
+        // previous subgraphs in the current layer.
+        curr = sampled_nodes.size() + sampled_num_by_prev_subgraphs[batch_id];
+
+        // The number of nodes to add to the sampled_cols. It is equal to the
+        // number of nodes sampled in a given layer by a given subgraph
+        // + the number of re-sampled nodes.
         sampled_num_thread += subgraph_sampled_nodes[batch_id].size() +
                               mappers[batch_id].resampled_map.size();
 
         sampler.fill_sampled_cols(mappers[batch_id], node_counter, curr,
-                                  sampled_num_thread);
+                                  sampled_num_thread, subgraph_sampled_nodes[batch_id].size());
       }
     }
 
@@ -559,8 +602,11 @@ void sample_parallel(NeighborSamplerImpl& sampler,
 
     begin = end, end = sampled_nodes.size();
 
-    set_threads_ranges(threads_ranges, subgraph_sampled_nodes, seeds_per_thread,
-                       begin, seed_size);
+    if (ell < num_neighbors.size() - 1) {
+      // No need to calculate new range of nodes for the threads in the last
+      // layer.
+      threads.set_scope(subgraph_sampled_nodes, begin);
+    }
   }
 }
 
@@ -608,8 +654,10 @@ sample(const at::Tensor& rowptr,
         NeighborSamplerImpl(rowptr.data_ptr<scalar_t>(),
                             col.data_ptr<scalar_t>(), temporal_strategy);
 
-    const bool parallel =
-        disjoint && omp_get_max_threads() > 1 && num_neighbors.size() > 1;
+    const bool parallel = true;//disjoint && omp_get_max_threads() > 1 && num_neighbors.size() > 1;
+    // std::cout<<"disjoint="<<disjoint<<std::endl;
+    // std::cout<<"max threads="<<omp_get_max_threads()<<std::endl;
+    // std::cout<<"nn size="<<num_neighbors.size()<<std::endl;
     if (!parallel) {
       sample_seq<node_t, scalar_t, temporal_t, NeighborSamplerImpl, replace,
                  directed, disjoint, return_edge_id>(
@@ -653,7 +701,7 @@ void sample_seq(
        const std::string temporal_strategy) {
     pyg::random::RandintEngine<scalar_t> generator;
 
-    std::vector<std::pair<int, edge_type>> threads_ranges_dict; // thread_id, edge_type
+    std::vector<std::pair<int, edge_type>> threads_scope_dict; // thread_id, edge_type
     int i = 0;
 
     phmap::parallel_flat_hash_map<node_type, size_t> num_nodes_dict;
@@ -662,11 +710,11 @@ void sample_seq(
       const auto num_nodes = rowptr_dict.at(to_rel_type(k)).size(0) - 1; // liczba nodow dla danego edge type
       num_nodes_dict[!csc ? std::get<0>(k) : std::get<2>(k)] = num_nodes; // liczba nodow dla danego typu noda
       const auto dst = !csc ? std::get<2>(k) : std::get<0>(k);
-      auto it = std::find_if(threads_ranges_dict.begin(), threads_ranges_dict.end(), [&dst, &csc](const auto& p){return ((!csc ? std::get<2>(p.second) : std::get<0>(p.second)) == dst);}); // zrobic ten sam myk co dla num nodes
-      if (it != threads_ranges_dict.end()) {
-        threads_ranges_dict.push_back({it->first, k});
+      auto it = std::find_if(threads_scope_dict.begin(), threads_scope_dict.end(), [&dst, &csc](const auto& p){return ((!csc ? std::get<2>(p.second) : std::get<0>(p.second)) == dst);}); // zrobic ten sam myk co dla num nodes
+      if (it != threads_scope_dict.end()) {
+        threads_scope_dict.push_back({it->first, k});
       } else {
-        threads_ranges_dict.push_back({i++, k});
+        threads_scope_dict.push_back({i++, k});
         // dst_sampled_nodes_dict[dst];  // Initialize empty vector.
       }
     }
@@ -737,16 +785,16 @@ void sample_seq(
     size_t begin, end;
     for (size_t ell = 0; ell < L; ++ell) {
       phmap::parallel_flat_hash_map<node_type, std::vector<node_t>> dst_sampled_nodes_dict;
-      for (const auto& tk : threads_ranges_dict) {
+      for (const auto& tk : threads_scope_dict) {
         dst_sampled_nodes_dict[!csc ? std::get<2>(tk.second) : std::get<0>(tk.second)]; // initialize empty vector
       }
 
   omp_set_num_threads(num_threads);    
-#pragma omp parallel num_threads(num_threads) default(none) shared(threads_ranges_dict, csc, ell, num_neighbors_dict, sampled_nodes_dict, dst_sampled_nodes_dict, mapper_dict, sampler_dict, slice_dict, time_dict, generator, seed_times) private(begin, end, batch_id)
+#pragma omp parallel num_threads(num_threads) default(none) shared(threads_scope_dict, csc, ell, num_neighbors_dict, sampled_nodes_dict, dst_sampled_nodes_dict, mapper_dict, sampler_dict, slice_dict, time_dict, generator, seed_times) private(begin, end, batch_id)
 {
       const int tid = omp_get_thread_num();
 
-      for (const auto tk : threads_ranges_dict) {
+      for (const auto tk : threads_scope_dict) {
         if (tk.first != tid) {
           continue;
         }

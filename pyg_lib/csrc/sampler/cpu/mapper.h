@@ -52,13 +52,17 @@ class Mapper {
     }
   }
 
-  std::pair<scalar_t, bool> insert(const node_t& node, int thread_counter) {
+  // For parallel disjoint
+  std::pair<scalar_t, bool> insert(const node_t& node, int thread_node_counter) {
     auto out = to_local_map.insert({node, curr});
     auto res = std::pair<scalar_t, bool>(out.first->second, out.second);
     if (res.second) {
       ++curr;
     } else {
-      resampled_map.insert({thread_counter, node});
+      // Save the nodes that have been resampled to the map, where the key is
+      // the node number sampled by the given thread. This will be needed to
+      // fill the sampled_cols vector.
+      resampled_map.insert({thread_node_counter, node});
     }
     return res;
   }
@@ -114,7 +118,7 @@ class Mapper {
   void update_local_vals(size_t sampled_nodes_size,
                          int sampled_num_by_prev_subgraphs,
                          std::vector<node_t>& subgraph_sampled_nodes) {
-    // iterate over sampled nodes to update their local values
+    // Iterate over sampled nodes to update their local values
     for (const auto& sampled_node : subgraph_sampled_nodes) {
       const auto search = to_local_map.find(sampled_node);
       if (search != to_local_map.end()) {
@@ -130,12 +134,11 @@ class Mapper {
 
   bool use_vec;
   std::vector<scalar_t> to_local_vec;
+  phmap::flat_hash_map<node_t, scalar_t> to_local_map;
 
  public:
   scalar_t curr = 0;
-  phmap::flat_hash_map<node_t, scalar_t> to_local_map;
   phmap::btree_map<int, node_t> resampled_map;
-  // std::vector<scalar_t> sampled_num_by_prev_subgraphs{0};
 };
 
 }  // namespace sampler
