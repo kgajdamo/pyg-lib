@@ -26,7 +26,7 @@ argparser.add_argument('--batch-sizes', nargs='+', type=int, default=[
 # argparser.add_argument('--directed', action='store_true')
 argparser.add_argument('--disjoint', action='store_true')
 argparser.add_argument('--num_neighbors', type=ast.literal_eval, default=[
-    [-1],
+    # [-1],
     # [2, 2],
     [15, 10, 5],
     [20, 15, 10],

@@ -654,7 +654,7 @@ sample(const at::Tensor& rowptr,
         NeighborSamplerImpl(rowptr.data_ptr<scalar_t>(),
                             col.data_ptr<scalar_t>(), temporal_strategy);
 
-    const bool parallel = true;//disjoint && omp_get_max_threads() > 1 && num_neighbors.size() > 1;
+    const bool parallel = false;//disjoint && omp_get_max_threads() > 1 && num_neighbors.size() > 1;
     // std::cout<<"disjoint="<<disjoint<<std::endl;
     // std::cout<<"max threads="<<omp_get_max_threads()<<std::endl;
     // std::cout<<"nn size="<<num_neighbors.size()<<std::endl;
