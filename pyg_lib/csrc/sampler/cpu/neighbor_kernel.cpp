@@ -687,8 +687,8 @@ sample(const at::Tensor& rowptr,
 
 template <typename node_t, typename scalar_t, typename NeighborSamplerImpl, bool replace, bool directed, bool disjoint, bool return_edge_id>
 void sample_seq(
-       phmap::parallel_flat_hash_map<edge_type, NeighborSamplerImpl>& sampler_dict,
-       phmap::parallel_flat_hash_map<node_type, std::vector<node_t>>& sampled_nodes_dict,
+       phmap::flat_hash_map<edge_type, NeighborSamplerImpl>& sampler_dict,
+       phmap::flat_hash_map<node_type, std::vector<node_t>>& sampled_nodes_dict,
        const std::vector<node_type>& node_types,
        const std::vector<edge_type>& edge_types,
        const c10::Dict<rel_type, at::Tensor>& rowptr_dict,
@@ -701,21 +701,20 @@ void sample_seq(
        const std::string temporal_strategy) {
     pyg::random::RandintEngine<scalar_t> generator;
 
-    std::vector<std::pair<int, edge_type>> threads_scope_dict; // thread_id, edge_type
+    std::vector<std::vector<edge_type>> threads_scope_dict(node_types.size());
     int i = 0;
 
-    phmap::parallel_flat_hash_map<node_type, size_t> num_nodes_dict;
+    phmap::flat_hash_map<node_type, size_t> num_nodes_dict;
 
     for (const auto& k : edge_types) {
-      const auto num_nodes = rowptr_dict.at(to_rel_type(k)).size(0) - 1; // liczba nodow dla danego edge type
-      num_nodes_dict[!csc ? std::get<0>(k) : std::get<2>(k)] = num_nodes; // liczba nodow dla danego typu noda
+      const auto num_nodes = rowptr_dict.at(to_rel_type(k)).size(0) - 1;
+      num_nodes_dict[!csc ? std::get<0>(k) : std::get<2>(k)] = num_nodes;
       const auto dst = !csc ? std::get<2>(k) : std::get<0>(k);
-      auto it = std::find_if(threads_scope_dict.begin(), threads_scope_dict.end(), [&dst, &csc](const auto& p){return ((!csc ? std::get<2>(p.second) : std::get<0>(p.second)) == dst);}); // zrobic ten sam myk co dla num nodes
+      auto it = std::find_if(threads_scope_dict.begin(), threads_scope_dict.end(), [&dst, &csc](const auto& p){if (p.size() > 0) { return ((!csc ? std::get<2>(p[0]) : std::get<0>(p[0])) == dst);} else {return false;}}); // zrobic ten sam myk co dla num nodes
       if (it != threads_scope_dict.end()) {
-        threads_scope_dict.push_back({it->first, k});
+        threads_scope_dict[it - threads_scope_dict.begin()].push_back(k);
       } else {
-        threads_scope_dict.push_back({i++, k});
-        // dst_sampled_nodes_dict[dst];  // Initialize empty vector.
+        threads_scope_dict[i++].push_back(k);
       }
     }
 
@@ -727,8 +726,8 @@ void sample_seq(
     }
 
     size_t L = 0;  // num_layers.
-    phmap::parallel_flat_hash_map<node_type, Mapper<node_t, scalar_t>> mapper_dict;
-    phmap::parallel_flat_hash_map<node_type, std::pair<size_t, size_t>> slice_dict;
+    phmap::flat_hash_map<node_type, Mapper<node_t, scalar_t>> mapper_dict;
+    phmap::flat_hash_map<node_type, std::pair<size_t, size_t>> slice_dict;
     std::vector<scalar_t> seed_times;
 
     for (const auto& k : node_types) {
@@ -780,45 +779,37 @@ void sample_seq(
       }
     }
 
-    const int num_threads = std::min(i, omp_get_max_threads());
+    const int num_threads = std::min(static_cast<int>(node_types.size()), omp_get_max_threads());
+    const int edges_per_thread = node_types.size() <= num_threads ? 1 : node_types.size() % num_threads == 0 ? node_types.size() / num_threads : node_types.size() / num_threads + 1 ;
 
     size_t begin, end;
     for (size_t ell = 0; ell < L; ++ell) {
-      phmap::parallel_flat_hash_map<node_type, std::vector<node_t>> dst_sampled_nodes_dict;
+      phmap::flat_hash_map<node_type, std::vector<node_t>> dst_sampled_nodes_dict;
       for (const auto& tk : threads_scope_dict) {
-        dst_sampled_nodes_dict[!csc ? std::get<2>(tk.second) : std::get<0>(tk.second)]; // initialize empty vector
+        dst_sampled_nodes_dict[!csc ? std::get<2>(tk[0]) : std::get<0>(tk[0])]; // initialize empty vector
       }
 
   omp_set_num_threads(num_threads);    
-#pragma omp parallel num_threads(num_threads) default(none) shared(threads_scope_dict, csc, ell, num_neighbors_dict, sampled_nodes_dict, dst_sampled_nodes_dict, mapper_dict, sampler_dict, slice_dict, time_dict, generator, seed_times) private(begin, end, batch_id)
+#pragma omp parallel num_threads(num_threads) private(begin, end, batch_id)
 {
       const int tid = omp_get_thread_num();
 
-      for (const auto tk : threads_scope_dict) {
-        if (tk.first != tid) {
-          continue;
-        }
-        // dst_sampled_nodes_dict[!csc ? std::get<2>(tk.second) : std::get<0>(tk.second)];
-      // for (const auto& k : edge_types) {
-        const auto src = !csc ? std::get<0>(tk.second) : std::get<2>(tk.second);
-        const auto dst = !csc ? std::get<2>(tk.second) : std::get<0>(tk.second);
-        const auto count = num_neighbors_dict.at(to_rel_type(tk.second))[ell];
-        auto src_sampled_nodes = sampled_nodes_dict.at(src); // !!!???
+      for (const auto &tk : threads_scope_dict[tid / edges_per_thread]) {
+        const auto src = !csc ? std::get<0>(tk) : std::get<2>(tk);
+        const auto dst = !csc ? std::get<2>(tk) : std::get<0>(tk);
+        const auto count = num_neighbors_dict.at(to_rel_type(tk))[ell];
+        auto& src_sampled_nodes = sampled_nodes_dict.at(src);
         auto& dst_sampled_nodes = dst_sampled_nodes_dict.at(dst);
         auto& dst_mapper = mapper_dict.at(dst);
-        auto& sampler = sampler_dict.at(tk.second);
-        // std::string printit_tk = "tid="+std::to_string(tid)+", tk.first="+std::to_string(tk.first)+"tk.second="+std::get<2>(tk.second)+", tk.second="+std::get<0>(tk.second)+"\n";
-        // std::cout<<printit_tk;
+        auto& sampler = sampler_dict.at(tk);
         std::tie(begin, end) = slice_dict.at(src);
 
         if (!time_dict.has_value() || !time_dict.value().contains(dst)) {
-          // std::cout<<"before"<<std::endl;
           for (size_t i = begin; i < end; ++i) {
             sampler.uniform_sample(/*global_src_node=*/src_sampled_nodes[i],
                                    /*local_src_node=*/i, count, dst_mapper,
                                    generator, dst_sampled_nodes);
           }
-          // std::cout<<"after"<<std::endl;
         } else if constexpr (!std::is_scalar<node_t>::value) {  // Temporal:
           const at::Tensor& dst_time = time_dict.value().at(dst);
           const auto dst_time_data = dst_time.data_ptr<scalar_t>();
@@ -832,47 +823,28 @@ void sample_seq(
           }
         }
       }
-      // std::string print_dst_sampled;
-      // for (auto& dst_sampled : dst_sampled_nodes_dict) {
-      //   print_dst_sampled += "{" + dst_sampled.first + ", ";
-      //   // for (auto sec : dst_sampled.second) {
-      //   //   print_dst_sampled += ", " + std::to_string(sec) + "}\n";
-      //   // }
-      // }
-      // std::cout<<print_dst_sampled;
 }
-      // for (const auto& k : edge_types) {
-      //   std::cout<<"sampled_rows="<<sampler_dict.at(k).sampled_rows_<<std::endl;
-      //   std::cout<<"sampled_cols="<<sampler_dict.at(k).sampled_cols_<<std::endl;
-      // }
+
       for (auto& dst_sampled : dst_sampled_nodes_dict) {
         std::copy(dst_sampled.second.begin(),
                 dst_sampled.second.end(),
                 std::back_inserter(sampled_nodes_dict[dst_sampled.first]));
       }
 
-    // for (auto& sampled : sampled_nodes_dict) {
-    //   std::cout<<"{"<<sampled.first<<": ";
-    //   for (auto &v : sampled.second) {
-    //     std::cout<<v<<", ";
-    //   }
-    //   std::cout<<"}"<<std::endl;
-    // }
-
       for (const auto& k : node_types) {
-        // std::cout<<"before: k="<<k<<"{"<<slice_dict[k].first<<", "<<slice_dict[k].second<<"}"<<std::endl;
         slice_dict[k] = {slice_dict.at(k).second,
                          sampled_nodes_dict.at(k).size()};
-        // std::cout<<"after: k="<<k<<"{"<<slice_dict[k].first<<", "<<slice_dict[k].second<<"}"<<std::endl;
       }
     }
 }
+
+
 // Parallel heterogeneous neighbor sampling ////////////////////////////////////
 
 template <typename node_t, typename scalar_t, typename NeighborSamplerImpl, bool replace, bool directed, bool disjoint, bool return_edge_id>
 void sample_parallel(
-       phmap::parallel_flat_hash_map<edge_type, NeighborSamplerImpl>& sampler_dict,
-       phmap::parallel_flat_hash_map<node_type, std::vector<node_t>>& sampled_nodes_dict,
+       phmap::flat_hash_map<edge_type, NeighborSamplerImpl>& sampler_dict,
+       phmap::flat_hash_map<node_type, std::vector<node_t>>& sampled_nodes_dict,
        const std::vector<node_type>& node_types,
        const std::vector<edge_type>& edge_types,
        const c10::Dict<rel_type, at::Tensor>& rowptr_dict,
@@ -885,7 +857,7 @@ void sample_parallel(
        const std::string temporal_strategy) {
     pyg::random::RandintEngine<scalar_t> generator;
 
-    phmap::parallel_flat_hash_map<node_type, size_t> num_nodes_dict;
+    phmap::flat_hash_map<node_type, size_t> num_nodes_dict;
     for (const auto& k : edge_types) {
       const auto num_nodes = rowptr_dict.at(to_rel_type(k)).size(0) - 1;
       num_nodes_dict[!csc ? std::get<0>(k) : std::get<2>(k)] = num_nodes;
@@ -898,8 +870,8 @@ void sample_parallel(
     }
 
     size_t L = 0;  // num_layers.
-    phmap::parallel_flat_hash_map<node_type, Mapper<node_t, scalar_t>> mapper_dict;
-    phmap::parallel_flat_hash_map<node_type, std::pair<size_t, size_t>> slice_dict;
+    phmap::flat_hash_map<node_type, Mapper<node_t, scalar_t>> mapper_dict;
+    phmap::flat_hash_map<node_type, std::pair<size_t, size_t>> slice_dict;
     std::vector<scalar_t> seed_times;
 
     for (const auto& k : node_types) {
@@ -1053,8 +1025,8 @@ sample(const std::vector<node_type>& node_types,
                             return_edge_id>
         NeighborSamplerImpl;
 
-    phmap::parallel_flat_hash_map<edge_type, NeighborSamplerImpl> sampler_dict;
-    phmap::parallel_flat_hash_map<node_type, std::vector<node_t>> sampled_nodes_dict;
+    phmap::flat_hash_map<edge_type, NeighborSamplerImpl> sampler_dict;
+    phmap::flat_hash_map<node_type, std::vector<node_t>> sampled_nodes_dict;
 
     const bool parallel = false;
         //disjoint && omp_get_max_threads() > 1 && num_neighbors.size() > 1;
