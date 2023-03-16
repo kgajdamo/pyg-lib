@@ -1,4 +1,5 @@
 #include <ATen/ATen.h>
+#include <ATen/Parallel.h>
 #include <torch/library.h>
 
 #include "parallel_hashmap/phmap.h"
@@ -11,11 +12,11 @@
 #include "pyg_lib/csrc/utils/cpu/convert.h"
 #include "pyg_lib/csrc/utils/types.h"
 
-#ifdef _OPENMP
-#include <omp.h>
-#else
-#define omp_get_max_threads() 0
-#endif
+// #ifdef _OPENMP
+// #include <omp.h>
+// #else
+// #define omp_get_max_threads() 0
+// #endif
 
 namespace pyg {
 namespace sampler {
@@ -369,7 +370,7 @@ void sample_parallel(
     slice_dict[k] = {0, 0};
   }
 
-  const bool parallel = omp_get_max_threads() > 1 && edge_types.size() > 1;
+  const bool parallel = at::get_num_threads() > 1 && edge_types.size() > 1;
   std::vector<std::vector<edge_type>> threads_edge_types;
 
   for (const auto& k : edge_types) {
@@ -412,6 +413,7 @@ void sample_parallel(
       mapper_dict.at(kv.key()).fill(seed);
     } else {
       auto& sampled_nodes = sampled_nodes_dict.at(kv.key());
+      sampled_nodes.reserve(seed.numel());
       auto& mapper = mapper_dict.at(kv.key());
       const auto seed_data = seed.data_ptr<scalar_t>();
       for (size_t i = 0; i < seed.numel(); ++i) {
@@ -422,14 +424,16 @@ void sample_parallel(
       if (seed_time_dict.has_value()) {
         const at::Tensor& seed_time = seed_time_dict.value().at(kv.key());
         const auto seed_time_data = seed_time.data_ptr<scalar_t>();
+        seed_times.reserve(seed_times.size() + seed.numel());
         for (size_t i = 0; i < seed.numel(); ++i) {
-          seed_times.push_back(seed_time_data[i]);
+          seed_times.emplace_back(seed_time_data[i]);
         }
       } else if (time_dict.has_value()) {
         const at::Tensor& time = time_dict.value().at(kv.key());
         const auto time_data = time.data_ptr<scalar_t>();
+        seed_times.reserve(seed_times.size() + seed.numel());
         for (size_t i = 0; i < seed.numel(); ++i) {
-          seed_times.push_back(time_data[seed_data[i]]);
+          seed_times.emplace_back(time_data[seed_data[i]]);
         }
       }
     }
@@ -438,10 +442,6 @@ void sample_parallel(
         sampled_nodes_dict.at(kv.key()).size();
   }
 
-  const int num_threads = std::min(static_cast<int>(threads_edge_types.size()),
-                                   omp_get_max_threads());
-
-  size_t begin, end;
   for (size_t ell = 0; ell < L; ++ell) {
     phmap::flat_hash_map<node_type, std::vector<node_t>> dst_sampled_nodes_dict;
     if (parallel) {
@@ -452,40 +452,46 @@ void sample_parallel(
       }
     }
 
-#pragma omp parallel for num_threads(num_threads) private(begin, end, batch_idx)
-    for (const auto& et : threads_edge_types) {
-      for (const auto& k : et) {
-        const auto src = !csc ? std::get<0>(k) : std::get<2>(k);
-        const auto dst = !csc ? std::get<2>(k) : std::get<0>(k);
-        const auto count = num_neighbors_dict.at(to_rel_type(k))[ell];
-        auto& src_sampled_nodes = sampled_nodes_dict.at(src);
-        auto& dst_sampled_nodes = parallel ? dst_sampled_nodes_dict.at(dst)
-                                           : sampled_nodes_dict.at(dst);
-        auto& dst_mapper = mapper_dict.at(dst);
-        auto& sampler = sampler_dict.at(k);
-        std::tie(begin, end) = slice_dict.at(src);
+    at::parallel_for(
+        0, threads_edge_types.size(), 1, [&](size_t _s, size_t _e) {
+          for (auto j = _s; j < _e; j++) {
+            for (const auto& k : threads_edge_types[j]) {
+              const auto src = !csc ? std::get<0>(k) : std::get<2>(k);
+              const auto dst = !csc ? std::get<2>(k) : std::get<0>(k);
+              const auto count = num_neighbors_dict.at(to_rel_type(k))[ell];
+              auto& src_sampled_nodes = sampled_nodes_dict.at(src);
+              auto& dst_sampled_nodes = parallel
+                                            ? dst_sampled_nodes_dict.at(dst)
+                                            : sampled_nodes_dict.at(dst);
+              auto& dst_mapper = mapper_dict.at(dst);
+              auto& sampler = sampler_dict.at(k);
+              size_t begin, end;
+              std::tie(begin, end) = slice_dict.at(src);
 
-        sampler.num_sampled_edges_per_hop.push_back(0);
+              sampler.num_sampled_edges_per_hop.push_back(0);
 
-        if (!time_dict.has_value() || !time_dict.value().contains(dst)) {
-          for (size_t i = begin; i < end; ++i) {
-            sampler.uniform_sample(/*global_src_node=*/src_sampled_nodes[i],
-                                   /*local_src_node=*/i, count, dst_mapper,
-                                   generator, dst_sampled_nodes);
+              if (!time_dict.has_value() || !time_dict.value().contains(dst)) {
+                for (size_t i = begin; i < end; ++i) {
+                  sampler.uniform_sample(
+                      /*global_src_node=*/src_sampled_nodes[i],
+                      /*local_src_node=*/i, count, dst_mapper, generator,
+                      dst_sampled_nodes);
+                }
+              } else if constexpr (!std::is_scalar<
+                                       node_t>::value) {  // Temporal:
+                const at::Tensor& dst_time = time_dict.value().at(dst);
+                const auto dst_time_data = dst_time.data_ptr<temporal_t>();
+                for (size_t i = begin; i < end; ++i) {
+                  const auto batch_idx = src_sampled_nodes[i].first;
+                  sampler.temporal_sample(
+                      /*global_src_node=*/src_sampled_nodes[i],
+                      /*local_src_node=*/i, count, seed_times[batch_idx],
+                      dst_time_data, dst_mapper, generator, dst_sampled_nodes);
+                }
+              }
+            }
           }
-        } else if constexpr (!std::is_scalar<node_t>::value) {  // Temporal:
-          const at::Tensor& dst_time = time_dict.value().at(dst);
-          const auto dst_time_data = dst_time.data_ptr<temporal_t>();
-          for (size_t i = begin; i < end; ++i) {
-            batch_idx = src_sampled_nodes[i].first;
-            sampler.temporal_sample(/*global_src_node=*/src_sampled_nodes[i],
-                                    /*local_src_node=*/i, count,
-                                    seed_times[batch_idx], dst_time_data,
-                                    dst_mapper, generator, dst_sampled_nodes);
-          }
-        }
-      }
-    }
+        });
 
     if (parallel) {
       for (auto& dst_sampled : dst_sampled_nodes_dict) {
@@ -494,12 +500,15 @@ void sample_parallel(
       }
     }
 
-    for (const auto& k : node_types) {
-      slice_dict[k] = {slice_dict.at(k).second,
-                       sampled_nodes_dict.at(k).size()};
-      num_sampled_nodes_per_hop_map.at(k).push_back(slice_dict.at(k).second -
-                                                    slice_dict.at(k).first);
-    }
+    at::parallel_for(0, node_types.size(), 1, [&](size_t _s, size_t _e) {
+      for (auto j = _s; j < _e; j++) {
+        const auto& k = node_types[j];
+        slice_dict[k] = {slice_dict.at(k).second,
+                         sampled_nodes_dict.at(k).size()};
+        num_sampled_nodes_per_hop_map.at(k).push_back(slice_dict.at(k).second -
+                                                      slice_dict.at(k).first);
+      }
+    });
   }
 }
 
