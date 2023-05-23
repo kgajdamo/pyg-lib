@@ -35,6 +35,19 @@ class Mapper {
     }
   }
 
+   // For parallel disjoint
+   std::pair<scalar_t, bool> insert(const node_t& node, int thread_node_counter) {
+     auto out = to_local_map.insert({node, curr});
+     auto res = std::pair<scalar_t, bool>(out.first->second, out.second);
+     if (res.second) {
+       ++curr;
+     }
+    //  } else {
+    //    resampled_map.insert({thread_counter, node});
+    //  }
+     return res;
+   }
+
   std::pair<scalar_t, bool> insert(const node_t& node) {
     std::pair<scalar_t, bool> res;
     if (use_vec) {
@@ -83,11 +96,14 @@ class Mapper {
 
  private:
   const size_t num_nodes, num_entries;
-  scalar_t curr = 0;
+  // scalar_t curr = 0;
 
   bool use_vec;
   std::vector<scalar_t> to_local_vec;
   phmap::flat_hash_map<node_t, scalar_t> to_local_map;
+
+public:
+  scalar_t curr = 0;
 };
 
 }  // namespace sampler
