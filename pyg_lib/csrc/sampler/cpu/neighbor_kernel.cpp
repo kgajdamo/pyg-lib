@@ -26,33 +26,20 @@ template <typename node_t>
 class MTUtils {
  public:
   MTUtils(const int seed_size) : seed_size(seed_size) {
-      const int requested_num_threads = at::get_num_threads();
-      // std::cout<<"num threads="<<requested_num_threads<<std::endl;
-      // if (requested_num_threads >= seed_size) {
-        seeds_per_thread = 1;
-        num = seed_size;
-      // } else if (seed_size % requested_num_threads != 0) {
-      //   seeds_per_thread = seed_size / requested_num_threads + 1;
-      //   num = seed_size / seeds_per_thread + 1;
-      // } else {
-      //   seeds_per_thread = seed_size / requested_num_threads;
-      //   num = requested_num_threads;
-      // }
+      seeds_per_thread = 1;
 
       // 2. Each thread is assigned a set of nodes for which it looks for
       // neighbors.
-      for (auto tid = 0; tid < num; tid++) {
-        scope.push_back(tid * seeds_per_thread);
+      for (auto tid = 0; tid <= seed_size; tid++) {
+        scope.push_back(tid);
       }
-      scope.push_back(
-        std::min(num * seeds_per_thread, seed_size));
-
-    // omp_set_num_threads(num);
-    std::cout<<"scope="<<std::endl;
-      for (auto s : scope) {
-        std::cout<<s<<" ";
-      }
-      std::cout<<""<<std::endl;
+      // scope.push_back(
+      //   std::min(seed_size * seeds_per_thread, seed_size));
+      //   std::cout<<"scope="<<std::endl;
+      // for (auto s : scope) {
+      //   std::cout<<s<<" ";
+      // }
+      // std::cout<<""<<std::endl;
   }
 
   void set_scope(
@@ -61,28 +48,25 @@ class MTUtils {
     // This function purpose is to calculate the nodes range for each thread
     // for the next layer based on the number of sampled nodes in the current
     // layer.
-    int batch_id = 0;
-    int batch_id_end = seeds_per_thread; // 1
     scope[0] = begin; // scope[0] = 3
 
     for (int t = 1; t < scope.size(); t++) { // t = 1, 2, 3
-      scope[t] = scope[t - 1];
-      for (batch_id; batch_id < batch_id_end; batch_id++) {
-        scope[t] += subgraph_sampled_nodes[batch_id].size();
-      }
-      batch_id = batch_id_end;
-      batch_id_end =
-          std::min(batch_id_end + seeds_per_thread, seed_size);
+
+      // for (batch_id; batch_id < batch_id_end; batch_id++) {
+      scope[t] = scope[t - 1] + subgraph_sampled_nodes[t - 1].size();
+      // }
+      // batch_id = batch_id_end;
+      // batch_id_end =
+      //     std::min(batch_id_end + 1, seed_size);
     }
-     std::cout<<"scope="<<std::endl;
-      for (auto s : scope) {
-        std::cout<<s<<" ";
-      }
-      std::cout<<""<<std::endl;
+    //  std::cout<<"scope="<<std::endl;
+    //   for (auto s : scope) {
+    //     std::cout<<s<<" ";
+    //   }
+    //   std::cout<<""<<std::endl;
   }
 
   const int seed_size;
-  int num;
   int seeds_per_thread;
 
   std::vector<int> scope;
@@ -146,8 +130,8 @@ class NeighborSampler {
       std::vector<std::vector<int64_t>>& increment_values) {
 
     at::parallel_for(
-           0, sampled_cols_vec_.size(), 1, [&](size_t _s, size_t _e) {
-      for (auto i=_s; i < _e; i++) {
+           0, sampled_cols_vec_.size(), 1, [&](size_t _s0, size_t _e0) {
+      for (auto i=_s0; i < _e0; i++) {
         at::parallel_for(
            0, sampled_cols_vec_[i].size(), 1, [&](size_t _s1, size_t _e1) {
           for (auto j=_s1; j < _e1; j++) {
@@ -173,35 +157,29 @@ class NeighborSampler {
     });
   }
 
-  void concat_results(std::vector<std::vector<int64_t>>& sampled_edges_size) {
-    for (size_t ell = 0; ell < sampled_edges_size[0].size(); ++ell) {
-      for (auto i = 0; i < sampled_edges_size.size(); ++i) {
-        int64_t beg = ell > 0 ? sampled_edges_size[i][ell - 1] : 0;
-        int64_t end = sampled_edges_size[i][ell];
-        std::copy(sampled_rows_vec_[i].begin() + beg,
-                sampled_rows_vec_[i].begin() + end,
-                 std::back_inserter(sampled_rows_));
-        
-        std::copy(sampled_cols_vec_[i].begin() + beg,
-                sampled_cols_vec_[i].begin() + end,
-                 std::back_inserter(sampled_cols_));
-        
-        std::copy(sampled_edge_ids_vec_[i].begin() + beg,
-                sampled_edge_ids_vec_[i].begin() + end,
-                 std::back_inserter(sampled_edge_ids_));
+  void concat_results(std::vector<std::vector<int64_t>>& sampled_edges_vec,
+                              std::vector<std::vector<int64_t>>& sampled_edges,
+                      std::vector<std::vector<int64_t>>& sampled_edges_size) {
+      for (size_t ell = 0; ell < sampled_edges_size[0].size(); ++ell) {
+        for (auto i = 0; i < sampled_edges_size.size(); ++i) {
+          int64_t beg = ell > 0 ? sampled_edges_size[i][ell - 1] : 0;
+          int64_t end = sampled_edges_size[i][ell];
+          std::copy(sampled_edges_vec[i].begin() + beg,
+                  sampled_edges_vec[i].begin() + end,
+                  std::back_inserter(sampled_edges));
+        }
       }
-    }
 
-    std::cout<<"sampled_cols: "<<std::endl;
-    for (auto sampled_col : sampled_cols_) {
-         std::cout<<sampled_col<<" ";
-    }
-    std::cout<<""<<std::endl;
-    std::cout<<"sampled_rows:"<<std::endl;
-    for (auto s=0; s < sampled_rows_.size(); s++) {
-         std::cout<<sampled_rows_[s]<<" ";
-    }
-    std::cout<<""<<std::endl;
+    // std::cout<<"sampled_cols: "<<std::endl;
+    // for (auto sampled_col : sampled_cols_) {
+    //      std::cout<<sampled_col<<" ";
+    // }
+    // std::cout<<""<<std::endl;
+    // std::cout<<"sampled_rows:"<<std::endl;
+    // for (auto s=0; s < sampled_rows_.size(); s++) {
+    //      std::cout<<sampled_rows_[s]<<" ";
+    // }
+    // std::cout<<""<<std::endl;
   }
 
   std::tuple<at::Tensor, at::Tensor, c10::optional<at::Tensor>>
@@ -318,14 +296,16 @@ class NeighborSampler {
                   std::vector<node_t>& out_global_dst_nodes,
                    int* node_counter = nullptr) {
     const auto global_dst_node_value = col_[edge_id];
-     const auto global_dst_node =
-         to_node_t(global_dst_node_value, global_src_node);
-     const bool parallel = node_counter != nullptr;
-     if (!parallel) {
-       const auto res = dst_mapper.insert(global_dst_node);
-       if (res.second) {  // not yet sampled.
-         out_global_dst_nodes.push_back(global_dst_node);
-       }
+    const auto global_dst_node =
+        to_node_t(global_dst_node_value, global_src_node);
+    
+    const auto res = dst_mapper.insert(global_dst_node);
+    if (res.second) {  // not yet sampled.
+      out_global_dst_nodes.push_back(global_dst_node);
+    }
+
+    const bool parallel = node_counter != nullptr;
+    if (!parallel) {
        if (save_edges) {
          num_sampled_edges_per_hop[num_sampled_edges_per_hop.size() - 1]++;
          sampled_rows_.push_back(local_src_node);
@@ -335,25 +315,18 @@ class NeighborSampler {
          }
        }
      } else {
-       const auto res = dst_mapper.insert(global_dst_node);
-       if (res.second) {
-         out_global_dst_nodes.push_back(global_dst_node);
-       }
        if (save_edges) {
-         if constexpr (!std::is_scalar<node_t>::value) {
-          //  const int tid = at::get_thread_num();
+        if constexpr (!std::is_scalar<node_t>::value) {
         
-        const auto batch_idx = global_src_node.first;
-        sampled_rows_vec_[batch_idx].push_back(local_src_node);
-        sampled_cols_vec_[batch_idx].push_back(res.first);
-        // sampled_cols_vec_[batch_idx].push_back(res.first);
+          const auto batch_idx = global_src_node.first;
+          sampled_rows_vec_[batch_idx].push_back(local_src_node);
+          sampled_cols_vec_[batch_idx].push_back(res.first);
 
-         if (save_edge_ids) {
-           sampled_edge_ids_vec_[batch_idx].push_back(edge_id);
-         }
-         }
+          if (save_edge_ids) {
+            sampled_edge_ids_vec_[batch_idx].push_back(edge_id);
+          }
+        }
        }
-      //  ++(*node_counter);
      }
    }
 
@@ -524,65 +497,56 @@ template <typename node_t,
    for (size_t ell = 0; ell < num_neighbors.size(); ++ell) {
      const auto count = num_neighbors[ell];
 
-     // preparation for going parallel
-    //  sampler.allocate_resources(sampled_nodes, seed_times, time, begin, end,
-    //                             count, threads.num, threads.scope);
      std::vector<std::vector<node_t>> subgraph_sampled_nodes(seed_size);
-
-    // std::cout<<"threads.num="<<threads.num<<std::endl;
-//  #pragma omp parallel num_threads(threads.num)
-
-    //  {
-      //  const int tid = 0;
-      //  int node_counter = 0;
-      //  int batch_id = 0;
 
        if (!time.has_value()) {
         at::parallel_for(
           0, seed_size, 1, [&](size_t _s, size_t _e) {
             for (auto j = _s; j < _e; j++) {
               for (auto i = threads.scope[j]; i < threads.scope[j + 1]; i++) {
-                std::string printit = "j="+std::to_string(j) + ", i=" + std::to_string(i) + "\n";
-                std::cout<<printit;
-                int batch_id = 0;
+                int batch_idx = 0;
                 int node_counter = 0;
                 if constexpr (!std::is_scalar<node_t>::value) {
-                  batch_id = sampled_nodes[i].first;
+                  batch_idx = sampled_nodes[i].first;
                 }
                 sampler.uniform_sample(
                     /*global_src_node=*/sampled_nodes[i],
-                    /*local_src_node=*/i, count, mappers[batch_id], generator,
-                    /*out_global_dst_nodes=*/subgraph_sampled_nodes[batch_id],
+                    /*local_src_node=*/i, count, mappers[batch_idx], generator,
+                    /*out_global_dst_nodes=*/subgraph_sampled_nodes[batch_idx],
                     &node_counter);
               }
             }
           });
-          std::cout<<"after parallel"<<std::endl;
        } else if constexpr (!std::is_scalar<node_t>::value) {  // Temporal:
-        //  const auto time_data = time.value().data_ptr<temporal_t>();
-        //  for (auto i = threads.scope[tid]; i < threads.scope[tid + 1]; i++) {
-        //    int node_counter = 0;
-        //    int batch_id = sampled_nodes[i].first;
+        at::parallel_for(
+          0, seed_size, 1, [&](size_t _s, size_t _e) {
+            const auto time_data = time.value().data_ptr<temporal_t>();
+            for (auto j = _s; j < _e; j++) {
+              for (auto i = threads.scope[j]; i < threads.scope[j + 1]; i++) {
+                int node_counter = 0;
+                int batch_idx = sampled_nodes[i].first;
 
-        //    sampler.temporal_sample(
-        //        /*global_src_node=*/sampled_nodes[i],
-        //        /*local_src_node=*/i, count, seed_times[batch_id], time_data,
-        //        mappers[batch_id], generator,
-        //        /*out_global_dst_nodes=*/subgraph_sampled_nodes[batch_id],
-        //        &node_counter);
-        //  }
+           sampler.temporal_sample(
+               /*global_src_node=*/sampled_nodes[i],
+               /*local_src_node=*/i, count, seed_times[batch_idx], time_data,
+               mappers[batch_idx], generator,
+               /*out_global_dst_nodes=*/subgraph_sampled_nodes[batch_idx],
+               &node_counter);
+         }
+            }
+          });
        }
     //  }
 
-     if constexpr (!std::is_scalar<node_t>::value) {
-      for (int z=0; z< subgraph_sampled_nodes.size(); z++) {
-        std::cout<<"subgraph nr = "<<z<<std::endl;
-        for (int x=0; x<subgraph_sampled_nodes[z].size(); x++) {
-          std::cout<<"("<<subgraph_sampled_nodes[z][x].first<<", "<<subgraph_sampled_nodes[z][x].second<<")";
-        }
-        std::cout<<" "<<std::endl;
-      }
-     }
+    //  if constexpr (!std::is_scalar<node_t>::value) {
+    //   for (int z=0; z< subgraph_sampled_nodes.size(); z++) {
+    //     std::cout<<"subgraph nr = "<<z<<std::endl;
+    //     for (int x=0; x<subgraph_sampled_nodes[z].size(); x++) {
+    //       std::cout<<"("<<subgraph_sampled_nodes[z][x].first<<", "<<subgraph_sampled_nodes[z][x].second<<")";
+    //     }
+    //     std::cout<<" "<<std::endl;
+    //   }
+    //  }
     //   std::cout<<"after parallel region"<<std::endl;
 
     for (auto i=0; i < subgraph_sampled_nodes.size(); i++) {
@@ -605,37 +569,37 @@ template <typename node_t,
       }
     });
 
-    for (auto s=0; s < num_nodes.size(); s++) {
-       std::cout<<"num_nodes vec: "<<s<<std::endl;
-       for (auto c=0; c<num_nodes[s].size(); c++) {
-         std::cout<<num_nodes[s][c]<<" ";
-       }
-       std::cout<<""<<std::endl;
-     }
+    // for (auto s=0; s < num_nodes.size(); s++) {
+    //    std::cout<<"num_nodes vec: "<<s<<std::endl;
+    //    for (auto c=0; c<num_nodes[s].size(); c++) {
+    //      std::cout<<num_nodes[s][c]<<" ";
+    //    }
+    //    std::cout<<""<<std::endl;
+    //  }
 
-    for (auto s=0; s < sum_num_nodes.size(); s++) {
-       std::cout<<"sum_num_nodes vec: "<<s<<std::endl;
-       for (auto c=0; c<sum_num_nodes[s].size(); c++) {
-         std::cout<<sum_num_nodes[s][c]<<" ";
-       }
-       std::cout<<""<<std::endl;
-     }
+    // for (auto s=0; s < sum_num_nodes.size(); s++) {
+    //    std::cout<<"sum_num_nodes vec: "<<s<<std::endl;
+    //    for (auto c=0; c<sum_num_nodes[s].size(); c++) {
+    //      std::cout<<sum_num_nodes[s][c]<<" ";
+    //    }
+    //    std::cout<<""<<std::endl;
+    //  }
 
-     for (auto s=0; s < num_seeds_num_nodes.size(); s++) {
-       std::cout<<"num_seeds_num_nodes vec: "<<s<<std::endl;
-       for (auto c=0; c<num_seeds_num_nodes[s].size(); c++) {
-         std::cout<<num_seeds_num_nodes[s][c]<<" ";
-       }
-       std::cout<<""<<std::endl;
-     }
+    //  for (auto s=0; s < num_seeds_num_nodes.size(); s++) {
+    //    std::cout<<"num_seeds_num_nodes vec: "<<s<<std::endl;
+    //    for (auto c=0; c<num_seeds_num_nodes[s].size(); c++) {
+    //      std::cout<<num_seeds_num_nodes[s][c]<<" ";
+    //    }
+    //    std::cout<<""<<std::endl;
+    //  }
 
-     for (auto s=0; s < sampled_edges_size.size(); s++) {
-       std::cout<<"sampled_edges_size vec: "<<s<<std::endl;
-       for (auto c=0; c<sampled_edges_size[s].size(); c++) {
-         std::cout<<sampled_edges_size[s][c]<<" ";
-       }
-       std::cout<<""<<std::endl;
-     }
+    //  for (auto s=0; s < sampled_edges_size.size(); s++) {
+    //    std::cout<<"sampled_edges_size vec: "<<s<<std::endl;
+    //    for (auto c=0; c<sampled_edges_size[s].size(); c++) {
+    //      std::cout<<sampled_edges_size[s][c]<<" ";
+    //    }
+    //    std::cout<<""<<std::endl;
+    //  }
 
      begin = end, end = sampled_nodes.size();
      num_sampled_nodes_per_hop.push_back(end - begin);
@@ -647,20 +611,20 @@ template <typename node_t,
        threads.set_scope(subgraph_sampled_nodes, begin);
      }
 
-     for (auto s=0; s < sampler.sampled_cols_vec_.size(); s++) {
-       std::cout<<"sampled_cols vec: "<<s<<std::endl;
-       for (auto c=0; c<sampler.sampled_cols_vec_[s].size(); c++) {
-         std::cout<<sampler.sampled_cols_vec_[s][c]<<" ";
-       }
-       std::cout<<""<<std::endl;
-     }
-     for (auto s=0; s < sampler.sampled_rows_vec_.size(); s++) {
-       std::cout<<"sampled_rows vec: "<<s<<std::endl;
-       for (auto c=0; c<sampler.sampled_rows_vec_[s].size(); c++) {
-         std::cout<<sampler.sampled_rows_vec_[s][c]<<" ";
-       }
-       std::cout<<""<<std::endl;
-     }
+    //  for (auto s=0; s < sampler.sampled_cols_vec_.size(); s++) {
+    //    std::cout<<"sampled_cols vec: "<<s<<std::endl;
+    //    for (auto c=0; c<sampler.sampled_cols_vec_[s].size(); c++) {
+    //      std::cout<<sampler.sampled_cols_vec_[s][c]<<" ";
+    //    }
+    //    std::cout<<""<<std::endl;
+    //  }
+    //  for (auto s=0; s < sampler.sampled_rows_vec_.size(); s++) {
+    //    std::cout<<"sampled_rows vec: "<<s<<std::endl;
+    //    for (auto c=0; c<sampler.sampled_rows_vec_[s].size(); c++) {
+    //      std::cout<<sampler.sampled_rows_vec_[s][c]<<" ";
+    //    }
+    //    std::cout<<""<<std::endl;
+    //  }
 }
 
   at::parallel_for(
@@ -681,13 +645,13 @@ template <typename node_t,
     }
   });
 
-  for (auto i=0; i<increment_values.size(); i++) {
-    std::cout<<"increment values num = "<<i<<std::endl;
-    for (auto j=0; j<increment_values[i].size(); j++) {
-      std::cout<<increment_values[i][j]<<" ";
-    }
-    std::cout<<""<<std::endl;
-  }
+  // for (auto i=0; i<increment_values.size(); i++) {
+  //   std::cout<<"increment values num = "<<i<<std::endl;
+  //   for (auto j=0; j<increment_values[i].size(); j++) {
+  //     std::cout<<increment_values[i][j]<<" ";
+  //   }
+  //   std::cout<<""<<std::endl;
+  // }
   sampler.update_sampled_cols(num_seeds_num_nodes, increment_values);
 
   sampler.concat_results(sampled_edges_size); // move content to get_sampled_edges()
