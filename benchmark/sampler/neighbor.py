@@ -48,13 +48,16 @@ argparser.add_argument('--libraries', nargs="*", type=str,
                        default=['pyg-lib', 'torch-sparse', 'dgl'])
 args = argparser.parse_args()
 
-# edge_index = torch.tensor([[0, 0, 1, 1, 1, 2, 2, 2, 3, 3, 3, 3, 4, 4, 5, 6, 6, 7, 7, 7],
-#                            [1, 4, 0, 2, 3, 1, 3, 7, 1, 2, 6, 7, 0, 5, 4, 3, 7, 2, 3, 6]], dtype=torch.long)
-# x = torch.tensor([[-1], [0], [1], [0], [1], [-1], [-1], [1]], dtype=torch.float)
+edge_index = torch.tensor(
+    [[0, 0, 1, 1, 1, 2, 2, 2, 3, 3, 3, 3, 4, 4, 5, 6, 6, 7, 7, 7],
+     [1, 4, 0, 2, 3, 1, 3, 7, 1, 2, 6, 7, 0, 5, 4, 3, 7, 2, 3, 6]],
+    dtype=torch.long)
+x = torch.tensor([[-1], [0], [1], [0], [1], [-1], [-1], [1]],
+                 dtype=torch.float)
 
-# dat = Data(x=x, edge_index=edge_index, y=2)
+dat = Data(x=x, edge_index=edge_index, y=2)
 
-# num_nodes = 8
+num_nodes = 8
 
 
 @withSeed
@@ -64,10 +67,10 @@ def test_neighbor(dataset, **kwargs):
         raise ValueError(
             "Temporal sampling needs to create disjoint subgraphs")
 
-    (rowptr, col), num_nodes = dataset, dataset[0].size(0) - 1
-    # out = to_csc(dat, device='cpu', share_memory=False,
-    #                       is_sorted=False, src_node_time=None)
-    # rowptr, col, _ = out
+    # (rowptr, col), num_nodes = dataset, dataset[0].size(0) - 1
+    out = to_csc(dat, device='cpu', share_memory=False, is_sorted=False,
+                 src_node_time=None)
+    rowptr, col, _ = out
 
     if 'dgl' in args.libraries:
         import dgl
@@ -109,10 +112,8 @@ def test_neighbor(dataset, **kwargs):
                     temporal_strategy=args.temporal_strategy,
                     return_edge_id=True,
                 )
-                # print(out_sample[0])
-                # print(out_sample[1])
-                # print(node_out)
-                # print(edge_out)
+                print(out_sample[0])
+                print(out_sample[1])
             pyg_lib_duration = time.perf_counter() - t
             data['pyg-lib'].append(round(pyg_lib_duration, 3))
             print(f'     pyg-lib={pyg_lib_duration:.3f} seconds')
