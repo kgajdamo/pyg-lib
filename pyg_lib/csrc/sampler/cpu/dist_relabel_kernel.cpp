@@ -101,7 +101,7 @@ relabel(
     const std::vector<edge_type>& edge_types,
     const c10::Dict<node_type, at::Tensor>& seed_dict,
     const c10::Dict<node_type, at::Tensor>& sampled_nodes_with_duplicates_dict,
-    const c10::Dict<rel_type, std::vector<int64_t>>&
+    const c10::Dict<rel_type, std::vector<std::vector<int64_t>>>&
         num_sampled_neighbors_per_node_dict,
     const c10::Dict<node_type, int64_t>& num_nodes_dict,
     const c10::optional<c10::Dict<node_type, at::Tensor>>& batch_dict,
@@ -178,44 +178,60 @@ relabel(
         }
       }
     }
-    at::parallel_for(
-        0, threads_edge_types.size(), 1, [&](size_t _s, size_t _e) {
-          for (auto j = _s; j < _e; j++) {
-            for (const auto& k : threads_edge_types[j]) {
-              const auto src = !csc ? std::get<0>(k) : std::get<2>(k);
-              const auto dst = !csc ? std::get<2>(k) : std::get<0>(k);
 
-              const auto num_sampled_neighbors_size =
-                  num_sampled_neighbors_per_node_dict.at(to_rel_type(k)).size();
+    for (size_t ell = 0; ell < 2; ++ell) {
+      at::parallel_for(
+          0, threads_edge_types.size(), 1, [&](size_t _s, size_t _e) {
+            for (auto _j = _s; _j < _e; _j++) {
+              for (const auto& k : threads_edge_types[_j]) {
+                const auto src = !csc ? std::get<0>(k) : std::get<2>(k);
+                const auto dst = !csc ? std::get<2>(k) : std::get<0>(k);
 
-              if (num_sampled_neighbors_size == 0) {
-                continue;
-              }
+                auto num_sampled_beg = ell == 0
+                                           ? 0
+                                           : num_sampled_neighbors_per_node_dict
+                                                 .at(to_rel_type(k))[ell - 1]
+                                                 .size();
+                auto num_sampled_end =
+                    num_sampled_beg +
+                    num_sampled_neighbors_per_node_dict.at(to_rel_type(k))[ell]
+                        .size();
+                const auto num_sampled_size_slice =
+                    std::make_pair(num_sampled_beg, num_sampled_end);
 
-              for (auto i = 0; i < num_sampled_neighbors_size; i++) {
-                auto& dst_mapper = mapper_dict.at(dst);
-                auto& dst_sampled_nodes_data = sampled_nodes_data_dict.at(dst);
-
-                slice_dict.at(dst).second +=
-                    num_sampled_neighbors_per_node_dict.at(to_rel_type(k))[i];
-                auto [begin, end] = slice_dict.at(dst);
-
-                for (auto j = begin; j < end; j++) {
-                  std::pair<scalar_t, bool> res;
-                  if constexpr (!disjoint) {
-                    res = dst_mapper.insert(dst_sampled_nodes_data[j]);
-                  } else {
-                    res = dst_mapper.insert({batch_data_dict.at(dst)[j],
-                                             dst_sampled_nodes_data[j]});
-                  }
-                  sampled_rows_dict.at(k).push_back(i);
-                  sampled_cols_dict.at(k).push_back(res.first);
+                if (num_sampled_size_slice.first ==
+                    num_sampled_size_slice.second) {
+                  continue;
                 }
-                slice_dict.at(dst).first = end;
+
+                for (auto i = num_sampled_size_slice.first;
+                     i < num_sampled_size_slice.second; i++) {
+                  auto& dst_mapper = mapper_dict.at(dst);
+                  auto& dst_sampled_nodes_data =
+                      sampled_nodes_data_dict.at(dst);
+
+                  slice_dict.at(dst).second +=
+                      num_sampled_neighbors_per_node_dict.at(to_rel_type(
+                          k))[ell][i - num_sampled_size_slice.first];
+                  auto [begin, end] = slice_dict.at(dst);
+
+                  for (auto j = begin; j < end; j++) {
+                    std::pair<scalar_t, bool> res;
+                    if constexpr (!disjoint) {
+                      res = dst_mapper.insert(dst_sampled_nodes_data[j]);
+                    } else {
+                      res = dst_mapper.insert({batch_data_dict.at(dst)[j],
+                                               dst_sampled_nodes_data[j]});
+                    }
+                    sampled_rows_dict.at(k).push_back(i);
+                    sampled_cols_dict.at(k).push_back(res.first);
+                  }
+                  slice_dict.at(dst).first = end;
+                }
               }
             }
-          }
-        });
+          });
+    }
 
     for (const auto& k : edge_types) {
       const auto edges = get_sampled_edges<scalar_t>(
@@ -254,7 +270,7 @@ hetero_relabel_neighborhood_kernel(
     const std::vector<edge_type>& edge_types,
     const c10::Dict<node_type, at::Tensor>& seed_dict,
     const c10::Dict<node_type, at::Tensor>& sampled_nodes_with_duplicates_dict,
-    const c10::Dict<rel_type, std::vector<int64_t>>&
+    const c10::Dict<rel_type, std::vector<std::vector<int64_t>>>&
         num_sampled_neighbors_per_node_dict,
     const c10::Dict<node_type, int64_t>& num_nodes_dict,
     const c10::optional<c10::Dict<node_type, at::Tensor>>& batch_dict,

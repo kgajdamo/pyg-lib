@@ -37,7 +37,7 @@ hetero_relabel_neighborhood(
     const std::vector<edge_type>& edge_types,
     const c10::Dict<node_type, at::Tensor>& seed_dict,
     const c10::Dict<node_type, at::Tensor>& sampled_nodes_with_duplicates_dict,
-    const c10::Dict<rel_type, std::vector<int64_t>>&
+    const c10::Dict<rel_type, std::vector<std::vector<int64_t>>>&
         sampled_neighbors_per_node_dict,
     const c10::Dict<node_type, int64_t>& num_nodes_dict,
     const c10::optional<c10::Dict<node_type, at::Tensor>>& batch_dict,
@@ -75,7 +75,7 @@ TORCH_LIBRARY_FRAGMENT(pyg, m) {
   m.def(TORCH_SELECTIVE_SCHEMA(
       "pyg::hetero_relabel_neighborhood(str[] node_types, (str, str, str)[] "
       "edge_types, Dict(str, Tensor) seed_dict, Dict(str, Tensor) "
-      "sampled_nodes_with_duplicates_dict, Dict(str, int[]) "
+      "sampled_nodes_with_duplicates_dict, Dict(str, int[][]) "
       "sampled_neighbors_per_node_dict, Dict(str, int) num_nodes_dict, "
       "Dict(str, Tensor)? batch_dict = None, bool csc = False, bool disjoint = "
       "False) -> (Dict(str, Tensor), Dict(str, Tensor))"));
