@@ -99,8 +99,6 @@ at::Tensor sampled_op_kernel(const at::Tensor& left,
             left_data, right_data, out_data, left_index_data, right_index_data,
             to_fn_type.at(fn), left_index.has_value(), right_index.has_value(),
             num_feats, numel);
-
-    C10_CUDA_KERNEL_LAUNCH_CHECK();
   });
   return out;
 }

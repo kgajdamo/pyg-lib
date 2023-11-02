@@ -15,87 +15,83 @@ namespace pyg {
 namespace ops {
 
 namespace {
-int num_threadblocks = -1;
+
 template <typename GemmKernel>
 void run_grouped_gemm(const at::TensorList input,
                       const at::TensorList other,
-                      const at::TensorList out,
-                      bool segment) {
-  using GemmGrouped = cutlass::gemm::device::GemmGrouped<GemmKernel>;
-  if (num_threadblocks == -1) {
-    num_threadblocks = GemmGrouped::sufficient();
-  }
-  const int64_t num_matrices = input.size();
-  const int64_t gemm_coord_size =
-      num_matrices * ((int64_t)sizeof(cutlass::gemm::GemmCoord));
-  // Number of gemm args not including *problem_sizes
-  at::Tensor gemm_args =
-      at::empty({num_matrices * 6 + gemm_coord_size},
-                at::TensorOptions().dtype(at::kLong).pinned_memory(true));
+                      const at::TensorList out) {
+  const auto num_matrices = input.size();
+  std::vector<at::Tensor> new_input, new_other, new_out;
+  std::vector<float*> ptr_A_host(num_matrices);
+  std::vector<float*> ptr_B_host(num_matrices);
+  std::vector<float*> ptr_C_host(num_matrices);
 
-  // Obtain pointers for each argument (on host)
-  int64_t* ld_A_data = gemm_args.data_ptr<int64_t>();  // Base pointer
-  int64_t* ld_B_data = ld_A_data + num_matrices;
-  int64_t* ld_C_data = ld_A_data + 2 * num_matrices;
-  int64_t* ptr_A_data = ld_A_data + 3 * num_matrices;
-  int64_t* ptr_B_data = ld_A_data + 4 * num_matrices;
-  int64_t* ptr_C_data = ld_A_data + 5 * num_matrices;
-  cutlass::gemm::GemmCoord* problem_sizes_data =
-      reinterpret_cast<cutlass::gemm::GemmCoord*>(ld_A_data + 6 * num_matrices);
-
-  // Set arguments into gemm_args from input args
   for (size_t i = 0; i < num_matrices; ++i) {
-    auto new_in = input[i].contiguous();
-    auto new_other = other[i].contiguous();
-    auto new_out = out[i].contiguous();
-    auto m = new_in.size(0), k = new_other.size((int)(segment)),
-         n = new_out.size(1);
+    new_input.push_back(input[i].contiguous());
+    ptr_A_host[i] = new_input[i].data_ptr<float>();
 
-    problem_sizes_data[i] = cutlass::gemm::GemmCoord(m, n, k);
+    new_other.push_back(other[i].contiguous());
+    ptr_B_host[i] = new_other[i].data_ptr<float>();
 
-    ld_A_data[i] = GemmKernel::LayoutA::packed({m, k}).stride(0);
-    ld_B_data[i] = GemmKernel::LayoutB::packed({k, n}).stride(0);
-    ld_C_data[i] = GemmKernel::LayoutC::packed({m, n}).stride(0);
-
-    ptr_A_data[i] = reinterpret_cast<int64_t>(new_in.data_ptr<float>());
-    ptr_B_data[i] = reinterpret_cast<int64_t>(new_other.data_ptr<float>());
-    ptr_C_data[i] = reinterpret_cast<int64_t>(new_out.data_ptr<float>());
+    new_out.push_back(out[i].contiguous());
+    ptr_C_host[i] = new_out[i].data_ptr<float>();
   }
 
-  // Transfer arguments to GPU
-  gemm_args = gemm_args.to(out[0].device(), true);
+  cutlass::DeviceAllocation<float*> ptr_A;
+  ptr_A.reset(num_matrices);
+  ptr_A.copy_from_host(ptr_A_host.data());
 
-  // Obtain pointers for each of arguments (on GPU)
-  ld_A_data = gemm_args.data_ptr<int64_t>();  // Base pointer
-  ld_B_data = ld_A_data + num_matrices;
-  ld_C_data = ld_A_data + 2 * num_matrices;
-  ptr_A_data = ld_A_data + 3 * num_matrices;
-  ptr_B_data = ld_A_data + 4 * num_matrices;
-  ptr_C_data = ld_A_data + 5 * num_matrices;
-  problem_sizes_data =
-      reinterpret_cast<cutlass::gemm::GemmCoord*>(ld_A_data + 6 * num_matrices);
+  cutlass::DeviceAllocation<float*> ptr_B;
+  ptr_B.reset(num_matrices);
+  ptr_B.copy_from_host(ptr_B_host.data());
+
+  cutlass::DeviceAllocation<float*> ptr_C;
+  ptr_C.reset(num_matrices);
+  ptr_C.copy_from_host(ptr_C_host.data());
+
+  std::vector<cutlass::gemm::GemmCoord> all_problems(num_matrices);
+  std::vector<int64_t> ld_A_host(num_matrices);
+  std::vector<int64_t> ld_B_host(num_matrices);
+  std::vector<int64_t> ld_C_host(num_matrices);
+  for (size_t i = 0; i < num_matrices; ++i) {
+    auto m = new_input[i].size(0), k = new_input[i].size(1),
+         n = new_out[i].size(1);
+    all_problems[i] = cutlass::gemm::GemmCoord(m, n, k);
+    ld_A_host[i] = GemmKernel::LayoutA::packed({m, k}).stride(0);
+    ld_B_host[i] = GemmKernel::LayoutB::packed({k, n}).stride(0);
+    ld_C_host[i] = GemmKernel::LayoutC::packed({m, n}).stride(0);
+  }
+
+  cutlass::DeviceAllocation<cutlass::gemm::GemmCoord> all_problems_device;
+  all_problems_device.reset(num_matrices);
+  all_problems_device.copy_from_host(all_problems.data());
+
+  cutlass::DeviceAllocation<int64_t> ld_A;
+  ld_A.reset(num_matrices);
+  ld_A.copy_from_host(ld_A_host.data());
+
+  cutlass::DeviceAllocation<int64_t> ld_B;
+  ld_B.reset(num_matrices);
+  ld_B.copy_from_host(ld_B_host.data());
+
+  cutlass::DeviceAllocation<int64_t> ld_C;
+  ld_C.reset(num_matrices);
+  ld_C.copy_from_host(ld_C_host.data());
 
   using EpilogueOutputOp = typename GemmKernel::Epilogue::OutputOp;
   typename EpilogueOutputOp::Params epilogue_op(1.0, 0.0);
 
-  // Create GemmGrouped::Arguments using the arguments prepared above
+  using GemmGrouped = cutlass::gemm::device::GemmGrouped<GemmKernel>;
   typename GemmGrouped::Arguments args(
-      problem_sizes_data, num_matrices,
-      /*threadblock_count=*/num_threadblocks, epilogue_op,
-      reinterpret_cast<float**>(ptr_A_data),
-      reinterpret_cast<float**>(ptr_B_data),
-      reinterpret_cast<float**>(ptr_C_data),
-      reinterpret_cast<float**>(ptr_C_data), ld_A_data, ld_B_data, ld_C_data,
-      ld_C_data);
+      all_problems_device.get(), num_matrices, /*threadblock_count=*/1024,
+      epilogue_op, ptr_A.get(), ptr_B.get(), ptr_C.get(), ptr_C.get(),
+      ld_A.get(), ld_B.get(), ld_C.get(), ld_C.get());
 
   GemmGrouped gemm;
-  auto status =
-      gemm.initialize(args, nullptr, at::cuda::getCurrentCUDAStream());
+  auto status = gemm.initialize(args);
   TORCH_CHECK(status == cutlass::Status::kSuccess, "GroupedGEMM init failed");
-  status = gemm.run(at::cuda::getCurrentCUDAStream());
+  status = gemm.run();
   TORCH_CHECK(status == cutlass::Status::kSuccess, "GroupedGEMM run failed");
-
-  C10_CUDA_KERNEL_LAUNCH_CHECK();
 }
 
 // Returns the amount of shared memory required per threadblock in
@@ -110,8 +106,15 @@ int shared_memory_for_kernel() {
 cudaDeviceProp get_dev_prop() {
   cudaDeviceProp properties;
   int device_idx;
-  C10_CUDA_CHECK(cudaGetDevice(&device_idx));
-  C10_CUDA_CHECK(cudaGetDeviceProperties(&properties, device_idx));
+  cudaError_t result = cudaGetDevice(&device_idx);
+  if (result != cudaSuccess) {
+    throw std::runtime_error(cudaGetErrorString(result));
+  }
+
+  result = cudaGetDeviceProperties(&properties, device_idx);
+  if (result != cudaSuccess) {
+    throw std::runtime_error(cudaGetErrorString(result));
+  }
   return properties;
 }
 cudaDeviceProp props;
@@ -119,8 +122,7 @@ bool props_queried = false;
 
 void grouped_matmul_out_kernel(const at::TensorList input,
                                const at::TensorList other,
-                               const at::TensorList out,
-                               bool segment) {
+                               const at::TensorList out) {
   if (!props_queried) {
     props = get_dev_prop();
     props_queried = true;
@@ -149,9 +151,10 @@ void grouped_matmul_out_kernel(const at::TensorList input,
             float, 1, float, float>,                   //
         cutlass::gemm::threadblock::                   // Swizzling Operator
         GemmIdentityThreadblockSwizzle<8>,             //
-        2                                              // Stages
+        2,                                             // Stages
+        cutlass::arch::OpMultiplyAdd                   // Operation
         >::GemmKernel;
-    run_grouped_gemm<GemmKernel_Volta>(input, other, out, segment);
+    run_grouped_gemm<GemmKernel_Volta>(input, other, out);
   } else {
     // Compute capability at or beyond that of Ampere. TF32 is available.
     bool use_tf32;
@@ -185,13 +188,14 @@ void grouped_matmul_out_kernel(const at::TensorList input,
                   float, 1, float, float>,                   //
               cutlass::gemm::threadblock::        // Swizzling Operator
               GemmIdentityThreadblockSwizzle<8>,  //
-              3                                   // Stages
+              3,                                  // Stages
+              cutlass::arch::OpMultiplyAdd        // Operation
               >::GemmKernel;
       int grouped_shared_mem =
           shared_memory_for_kernel<DefaultGemmKernel_TF32>();
       if (grouped_shared_mem < props.sharedMemPerBlockOptin) {
         // full size GPU
-        run_grouped_gemm<DefaultGemmKernel_TF32>(input, other, out, segment);
+        run_grouped_gemm<DefaultGemmKernel_TF32>(input, other, out);
       } else {
         // Smaller GPU
         using SmallGemmKernel_TF32 =
@@ -217,9 +221,10 @@ void grouped_matmul_out_kernel(const at::TensorList input,
                     float, 1, float, float>,                   //
                 cutlass::gemm::threadblock::        // Swizzling Operator
                 GemmIdentityThreadblockSwizzle<8>,  //
-                3                                   // Stages
+                3,                                  // Stages
+                cutlass::arch::OpMultiplyAdd        // Operation
                 >::GemmKernel;
-        run_grouped_gemm<SmallGemmKernel_TF32>(input, other, out, segment);
+        run_grouped_gemm<SmallGemmKernel_TF32>(input, other, out);
       }
     } else {
       // TF32 is manually disabled
@@ -245,13 +250,14 @@ void grouped_matmul_out_kernel(const at::TensorList input,
                   float, 1, float, float>,                   //
               cutlass::gemm::threadblock::        // Swizzling Operator
               GemmIdentityThreadblockSwizzle<8>,  //
-              3                                   // Stages
+              3,                                  // Stages
+              cutlass::arch::OpMultiplyAdd        // Operation
               >::GemmKernel;
       int grouped_shared_mem =
           shared_memory_for_kernel<DefaultGemmKernel_FP32>();
       if (grouped_shared_mem < props.sharedMemPerBlockOptin) {
         // full size GPU
-        run_grouped_gemm<DefaultGemmKernel_FP32>(input, other, out, segment);
+        run_grouped_gemm<DefaultGemmKernel_FP32>(input, other, out);
       } else {
         // Smaller GPU
         using SmallGemmKernel_FP32 =
@@ -277,9 +283,10 @@ void grouped_matmul_out_kernel(const at::TensorList input,
                     float, 1, float, float>,                   //
                 cutlass::gemm::threadblock::        // Swizzling Operator
                 GemmIdentityThreadblockSwizzle<8>,  //
-                3                                   // Stages
+                3,                                  // Stages
+                cutlass::arch::OpMultiplyAdd        // Operation
                 >::GemmKernel;
-        run_grouped_gemm<SmallGemmKernel_FP32>(input, other, out, segment);
+        run_grouped_gemm<SmallGemmKernel_FP32>(input, other, out);
       }
     }
   }
@@ -290,7 +297,7 @@ std::vector<at::Tensor> grouped_matmul_kernel(const at::TensorList input,
   std::vector<at::Tensor> out(input.size());
   for (size_t i = 0; i < input.size(); ++i)
     out[i] = input[i].new_empty({input[i].size(0), other[i].size(-1)});
-  grouped_matmul_out_kernel(input, other, out, false);
+  grouped_matmul_out_kernel(input, other, out);
 
   return out;
 }
@@ -307,7 +314,7 @@ at::Tensor segment_matmul_kernel(const at::Tensor& input,
   grouped_matmul_out_kernel(
       input.contiguous().split_with_sizes(/*split_size=*/sizes, /*dim=*/0),
       other.contiguous().split(/*split_size=*/1, /*dim=*/0),
-      out.split_with_sizes(/*split_size=*/sizes, /*dim=*/0), true);
+      out.split_with_sizes(/*split_size=*/sizes, /*dim=*/0));
 
   return out;
 }

@@ -23,7 +23,6 @@ neighbor_sample(const at::Tensor& rowptr,
                 const std::vector<int64_t>& num_neighbors,
                 const c10::optional<at::Tensor>& time = c10::nullopt,
                 const c10::optional<at::Tensor>& seed_time = c10::nullopt,
-                const c10::optional<at::Tensor>& edge_weight = c10::nullopt,
                 bool csc = false,
                 bool replace = false,
                 bool directed = true,
@@ -52,34 +51,12 @@ hetero_neighbor_sample(
         c10::nullopt,
     const c10::optional<c10::Dict<node_type, at::Tensor>>& seed_time_dict =
         c10::nullopt,
-    const c10::optional<c10::Dict<rel_type, at::Tensor>>& edge_weight_dict =
-        c10::nullopt,
     bool csc = false,
     bool replace = false,
     bool directed = true,
     bool disjoint = false,
     std::string strategy = "uniform",
     bool return_edge_id = true);
-
-// For distributed sampling purposes. Leverages the `neighbor_sample` function
-// internally. Samples one-hop neighborhoods with duplicates from all node
-// indices in `seed` in the graph given by `(rowptr, col)`.
-// Returns the original node and edge indices for all sampled nodes and edges.
-// Lastly, returns the cummulative sum of sampled neighbors for each input node.
-PYG_API
-std::tuple<at::Tensor, at::Tensor, std::vector<int64_t>> dist_neighbor_sample(
-    const at::Tensor& rowptr,
-    const at::Tensor& col,
-    const at::Tensor& seed,
-    const int64_t num_neighbors,
-    const c10::optional<at::Tensor>& time = c10::nullopt,
-    const c10::optional<at::Tensor>& seed_time = c10::nullopt,
-    const c10::optional<at::Tensor>& edge_weight = c10::nullopt,
-    bool csc = false,
-    bool replace = false,
-    bool directed = true,
-    bool disjoint = false,
-    std::string strategy = "uniform");
 
 }  // namespace sampler
 }  // namespace pyg

@@ -11,7 +11,6 @@ recursive-exclude third_party/parallel-hashmap/html *
 recursive-exclude third_party/parallel-hashmap/tests *
 recursive-exclude third_party/parallel-hashmap/examples *
 recursive-exclude third_party/parallel-hashmap/benchmark *
-recursive-exclude third_party/METIS/graphs *
 
 recursive-exclude test *
 recursive-exclude docs *

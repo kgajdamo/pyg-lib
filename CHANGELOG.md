@@ -3,26 +3,9 @@
 All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/).
 
-## [0.4.0] - 2023-MM-DD
+## [0.3.0] - 2023-MM-DD
 ### Added
 ### Changed
-- Added `--biased` parameter to run benchmarks for biased sampling ([#267](https://github.com/pyg-team/pyg-lib/pull/267))
-### Removed
-
-## [0.3.0] - 2023-10-11
-### Added
-- Added PyTorch 2.1 support ([#256](https://github.com/pyg-team/pyg-lib/pull/256))
-- Added low-level support for distributed neighborhood sampling ([#246](https://github.com/pyg-team/pyg-lib/pull/246), [#252](https://github.com/pyg-team/pyg-lib/pull/252), [#253](https://github.com/pyg-team/pyg-lib/pull/253), [#254](https://github.com/pyg-team/pyg-lib/pull/254))
-- Added support for homogeneous and heterogeneous biased neighborhood sampling ([#247](https://github.com/pyg-team/pyg-lib/pull/247), [#251](https://github.com/pyg-team/pyg-lib/pull/251))
-- Added dispatch for XPU device in `index_sort` ([#243](https://github.com/pyg-team/pyg-lib/pull/243))
-- Added `metis` partitioning ([#229](https://github.com/pyg-team/pyg-lib/pull/229))
-- Enable `hetero_neighbor_samplee` to work in parallel ([#211](https://github.com/pyg-team/pyg-lib/pull/211))
-### Changed
-- Fixed vector-based mapping issue in `Mapping` ([#244](https://github.com/pyg-team/pyg-lib/pull/244))
-- Fixed performance issues reported by Coverity Tool ([#240](https://github.com/pyg-team/pyg-lib/pull/240))
-- Updated `cutlass` version for speed boosts in `segment_matmul` and `grouped_matmul` ([#235](https://github.com/pyg-team/pyg-lib/pull/235))
-- Drop nested tensor wrapper for `grouped_matmul` implementation ([#226](https://github.com/pyg-team/pyg-lib/pull/226))
-- Added `generate_range_of_ints` function (it uses MKL library in order to generate ints) to RandintEngine class ([#222](https://github.com/pyg-team/pyg-lib/pull/222))
 - Fixed TorchScript support in `grouped_matmul` ([#220](https://github.com/pyg-team/pyg-lib/pull/220))
 ### Removed
 
@@ -35,7 +18,6 @@ The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/).
 - Added `bias` term to `grouped_matmul` and `segment_matmul` ([#161](https://github.com/pyg-team/pyg-lib/pull/161))
 - Added `sampled_op` implementation ([#156](https://github.com/pyg-team/pyg-lib/pull/156), [#159](https://github.com/pyg-team/pyg-lib/pull/159), [#160](https://github.com/pyg-team/pyg-lib/pull/160))
 ### Changed
-- Improved `[segment|grouped]_matmul` GPU implementation by reducing launch overheads ([#213](https://github.com/pyg-team/pyg-lib/pull/213))
 - Sample the nodes with the same timestamp as seed nodes ([#187](https://github.com/pyg-team/pyg-lib/pull/187))
 - Added `write-csv` (saves benchmark results as csv file) and `libraries` (determines which libraries will be used in benchmark) parameters ([#167](https://github.com/pyg-team/pyg-lib/pull/167))
 - Enable benchmarking of neighbor sampler on temporal graphs ([#165](https://github.com/pyg-team/pyg-lib/pull/165))

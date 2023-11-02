@@ -77,8 +77,6 @@ at::Tensor random_walk_kernel(const at::Tensor& rowptr,
     random_walk_kernel_impl<<<blocks(seed.size(0)), threads(), 0, stream>>>(
         rowptr_data, col_data, seed_data, rand_data, out_data, seed.size(0),
         walk_length);
-
-    C10_CUDA_KERNEL_LAUNCH_CHECK();
   });
 
   return out.t().contiguous();

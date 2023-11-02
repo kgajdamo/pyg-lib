@@ -12,7 +12,7 @@ import warnings
 from setuptools import Extension, find_packages, setup
 from setuptools.command.build_ext import build_ext
 
-__version__ = '0.3.0'
+__version__ = '0.2.0'
 URL = 'https://github.com/pyg-team/pyg-lib'
 
 
@@ -93,15 +93,17 @@ def maybe_append_with_mkl(dependencies):
         torch_config = torch.__config__.show()
         with_mkl_blas = 'BLAS_INFO=mkl' in torch_config
         if torch.backends.mkl.is_available() and with_mkl_blas:
-            product_version = '2023.1.0'
+            # product version is decoupled from library version. For older
+            # releases, where MKL was not a part of oneAPI, we can safely use
+            # 2021.4 as it is backward compatible (default for PyTorch conda
+            # distribution).
+            product_version = '2021.4'
             pattern = r'oneAPI Math Kernel Library Version [0-9]{4}\.[0-9]+'
             match = re.search(pattern, torch_config)
             if match:
                 product_version = match.group(0).split(' ')[-1]
 
             dependencies.append(f'mkl-include=={product_version}')
-            dependencies.append(f'mkl=={product_version}')
-            dependencies.append(f'mkl-devel=={product_version}')
 
 
 install_requires = []
@@ -142,7 +144,7 @@ setup(
         'graph-neural-networks',
         'graph-convolutional-networks',
     ],
-    python_requires='>=3.8',
+    python_requires='>=3.7',
     install_requires=install_requires,
     extras_require={
         'triton': triton_requires,

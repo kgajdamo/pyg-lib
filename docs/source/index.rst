@@ -14,4 +14,3 @@ PyG-lib Documentation
    modules/root
    modules/ops
    modules/sampler
-   modules/partition
