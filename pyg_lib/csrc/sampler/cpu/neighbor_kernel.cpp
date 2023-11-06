@@ -464,54 +464,18 @@ void sample_parallel(NeighborSamplerImpl& sampler,
 
     std::vector<std::vector<node_t>> subgraph_sampled_nodes(seed_size);
     auto chunk_size = seed_size / at::get_num_threads();
-    if (!time.has_value()) {
-      at::parallel_for(0, seed_size, chunk_size, [&](size_t _s, size_t _e) {
+    at::parallel_for(0, seed_size, chunk_size, [&](size_t _s, size_t _e) {
         for (auto j = _s; j < _e; j++) {
           for (auto i = scope[j]; i < scope[j + 1]; i++) {
-            int batch_idx = 0;
             int node_counter = 0;
-            if constexpr (!std::is_scalar<node_t>::value) {
-              batch_idx = sampled_nodes[i].first;
-            }
             sampler.uniform_sample(
                 /*global_src_node=*/sampled_nodes[i],
-                /*local_src_node=*/i, count, mappers[batch_idx], generator,
-                /*out_global_dst_nodes=*/subgraph_sampled_nodes[batch_idx],
+                /*local_src_node=*/i, count, mappers[j], generator,
+                /*out_global_dst_nodes=*/subgraph_sampled_nodes[j],
                 &node_counter);
           }
         }
-      });
-    } else if constexpr (!std::is_scalar<node_t>::value) {  // Temporal:
-      at::parallel_for(0, seed_size, chunk_size, [&](size_t _s, size_t _e) {
-        const auto time_data = time.value().data_ptr<temporal_t>();
-        for (auto j = _s; j < _e; j++) {
-          for (auto i = scope[j]; i < scope[j + 1]; i++) {
-            int node_counter = 0;
-            int batch_idx = sampled_nodes[i].first;
-
-            sampler.temporal_sample(
-                /*global_src_node=*/sampled_nodes[i],
-                /*local_src_node=*/i, count, seed_times[batch_idx], time_data,
-                mappers[batch_idx], generator,
-                /*out_global_dst_nodes=*/subgraph_sampled_nodes[batch_idx],
-                &node_counter);
-          }
-        }
-      });
-    }
-    //  }
-
-    //  if constexpr (!std::is_scalar<node_t>::value) {
-    //   for (int z=0; z< subgraph_sampled_nodes.size(); z++) {
-    //     std::cout<<"subgraph nr = "<<z<<std::endl;
-    //     for (int x=0; x<subgraph_sampled_nodes[z].size(); x++) {
-    //       std::cout<<"("<<subgraph_sampled_nodes[z][x].first<<",
-    //       "<<subgraph_sampled_nodes[z][x].second<<")";
-    //     }
-    //     std::cout<<" "<<std::endl;
-    //   }
-    //  }
-    //   std::cout<<"after parallel region"<<std::endl;
+    });
 
     for (auto i = 0; i < subgraph_sampled_nodes.size(); i++) {
       std::copy(subgraph_sampled_nodes[i].begin(),
