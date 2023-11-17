@@ -39,9 +39,9 @@ argparser.add_argument(
     type=ast.literal_eval,
     default=[
         [10, 10],
-        [-1],
-        [15, 10, 5],
-        [20, 15, 10],
+      #  [-1],
+      #  [15, 10, 5],
+      #  [20, 15, 10],
     ])
 argparser.add_argument('--replace', action='store_true')
 argparser.add_argument('--shuffle', action='store_true')
@@ -89,7 +89,7 @@ def test_neighbor(dataset, **kwargs):
         if 'pyg-lib' in args.libraries:
             t = time.perf_counter()
             #for _ in range(20):
-            for seed in tqdm(node_perm.split(batch_size)):
+            for seed in node_perm.split(batch_size):
                 samp_data = pyg_lib.sampler.neighbor_sample(
                     rowptr,
                     col,
