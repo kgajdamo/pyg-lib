@@ -14,15 +14,17 @@ from pyg_lib.testing import withDataset, withSeed
 
 argparser = argparse.ArgumentParser()
 argparser.add_argument('--batch-sizes', nargs='+', type=int, default=[
-    512,
+    2,
+    8,
+    32,
+    128,
     1024,
-    2048,
-    4096,
     8192,
 ])
 argparser.add_argument('--directed', action='store_true')
 argparser.add_argument('--disjoint', action='store_true')
 argparser.add_argument('--num_neighbors', type=ast.literal_eval, default=[
+    [10,10],
     [-1],
     [15, 10, 5],
     [20, 15, 10],
