@@ -367,7 +367,7 @@ sample(const at::Tensor& rowptr,
 
     size_t begin = 0, end = seed.size(0);
     for (size_t ell = 0; ell < num_neighbors.size(); ++ell) {
-	    std::chrono::steady_clock::time_point ell_begin = std::chrono::steady_clock::now();
+	//    std::chrono::steady_clock::time_point ell_begin = std::chrono::steady_clock::now();
 	const auto count = num_neighbors[ell];
       sampler.num_sampled_edges_per_hop.push_back(0);
       if (edge_weight.has_value()) {
@@ -411,9 +411,9 @@ sample(const at::Tensor& rowptr,
             cumsum_neighbors_per_node.push_back(sampled_nodes.size());
         }
       }
-      std::chrono::steady_clock::time_point ell_par_end = std::chrono::steady_clock::now();
-      std::chrono::steady_clock::time_point ell_end = std::chrono::steady_clock::now();
-      std::cout << "Time for ell=" << ell << ": parallel=" << std::chrono::duration_cast<std::chrono::microseconds>(ell_par_end - ell_begin).count() << "; total=" << std::chrono::duration_cast<std::chrono::microseconds>(ell_end - ell_begin).count() << std::endl;
+      //std::chrono::steady_clock::time_point ell_par_end = std::chrono::steady_clock::now();
+      //std::chrono::steady_clock::time_point ell_end = std::chrono::steady_clock::now();
+      //std::cout << "Time for ell=" << ell << ": parallel=" << std::chrono::duration_cast<std::chrono::microseconds>(ell_par_end - ell_begin).count() << "; total=" << std::chrono::duration_cast<std::chrono::microseconds>(ell_end - ell_begin).count() << std::endl;
       begin = end, end = sampled_nodes.size();
       num_sampled_nodes_per_hop.push_back(end - begin);
     }
@@ -428,8 +428,8 @@ sample(const at::Tensor& rowptr,
 
     num_sampled_edges_per_hop = sampler.num_sampled_edges_per_hop;
   });
-  std::chrono::steady_clock::time_point sampl_end = std::chrono::steady_clock::now();
-  std::cout << "Total time: " << std::chrono::duration_cast<std::chrono::microseconds>(sampl_end - sampl_begin).count() << std::endl;
+  //std::chrono::steady_clock::time_point sampl_end = std::chrono::steady_clock::now();
+  //std::cout << "Total time: " << std::chrono::duration_cast<std::chrono::microseconds>(sampl_end - sampl_begin).count() << std::endl;
 
   return std::make_tuple(out_row, out_col, out_node_id, out_edge_id,
                          num_sampled_nodes_per_hop, num_sampled_edges_per_hop,

@@ -14,9 +14,9 @@ from pyg_lib.testing import withDataset, withSeed
 
 argparser = argparse.ArgumentParser()
 argparser.add_argument('--batch-sizes', nargs='+', type=int, default=[
-    2,
-    8,
-    32,
+#    2,
+#    8,
+#    32,
     128,
     1024,
     8192,
@@ -24,9 +24,9 @@ argparser.add_argument('--batch-sizes', nargs='+', type=int, default=[
 argparser.add_argument('--directed', action='store_true')
 argparser.add_argument('--disjoint', action='store_true')
 argparser.add_argument('--num_neighbors', type=ast.literal_eval, default=[
-#    [10,10],
-#    [-1],
-#    [15, 10, 5],
+    [10,10],
+    [-1],
+    [15, 10, 5],
     [20, 15, 10],
 ])
 argparser.add_argument('--replace', action='store_true')
@@ -82,8 +82,9 @@ def test_neighbor(dataset, **kwargs):
 
         if 'pyg-lib' in args.libraries:
             t = time.perf_counter()
+            #total_edges_sampled = 0
             for seed in tqdm(node_perm.split(batch_size)):
-                pyg_lib.sampler.neighbor_sample(
+                batch = pyg_lib.sampler.neighbor_sample(
                     rowptr,
                     col,
                     seed,
@@ -97,9 +98,12 @@ def test_neighbor(dataset, **kwargs):
                     temporal_strategy=args.temporal_strategy,
                     return_edge_id=True,
                 )
+                #total_edges_sampled += batch[0].shape[0]
+                #import pdb; pdb.set_trace()
             pyg_lib_duration = time.perf_counter() - t
             data['pyg-lib'].append(round(pyg_lib_duration, 3))
             print(f'     pyg-lib={pyg_lib_duration:.3f} seconds')
+            #print(f'     pyg-lib total edges={total_edges_sampled}')
 
         if not args.disjoint:
             if 'torch-sparse' in args.libraries:
