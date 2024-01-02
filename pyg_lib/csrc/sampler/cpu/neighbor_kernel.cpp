@@ -331,7 +331,14 @@ sample(const at::Tensor& rowptr,
     typedef NeighborSampler<node_t, scalar_t, temporal_t, replace, directed,
                             return_edge_id, distributed>
         NeighborSamplerImpl;
+// -------------------------------
+// SEMI-DISJOINT CODE start here
 
+    const auto seed_size = seed.size(0);
+
+    std::vector<std::vector<int64_t>> num_nodes(seed_size);
+    std::vector<std::vector<node_t>> subgraph_sampled_nodes(seed_size);
+    std::vector<std::vector<int64_t>> sampled_edges_size(seed_size);
     pyg::random::RandintEngine<scalar_t> generator;
 
     std::vector<node_t> sampled_nodes;
@@ -343,12 +350,17 @@ sample(const at::Tensor& rowptr,
 
     const auto seed_data = seed.data_ptr<scalar_t>();
     if constexpr (!disjoint) {
+      std::cout << "THIS POC IS ONLY FOR DISJOIT MODE" << std::endl;
       sampled_nodes = pyg::utils::to_vector<scalar_t>(seed);
-      mapper.fill(seed);
+      //mapper.fill(seed);
     } else {
+      if constexpr (!std::is_scalar<node_t>::value) {
       for (size_t i = 0; i < seed.numel(); ++i) {
-        sampled_nodes.push_back({i, seed_data[i]});
+//	std::pair<scalar_t, scalar_t> seed_node{0, seed_data[i]};
+        subgraph_sampled_nodes[i].push_back({0, seed_data[i]});
         mapper.insert({i, seed_data[i]});
+	num_nodes[i].push_back(1);
+      } 
       }
       if (seed_time.has_value()) {
         const auto seed_time_data = seed_time.value().data_ptr<temporal_t>();
@@ -364,26 +376,14 @@ sample(const at::Tensor& rowptr,
     }
 
     num_sampled_nodes_per_hop.push_back(seed.numel());
-
+    
+    auto chunk_size = seed_size / at::get_num_threads();
     size_t begin = 0, end = seed.size(0);
+
     for (size_t ell = 0; ell < num_neighbors.size(); ++ell) {
 	//    std::chrono::steady_clock::time_point ell_begin = std::chrono::steady_clock::now();
 	const auto count = num_neighbors[ell];
       sampler.num_sampled_edges_per_hop.push_back(0);
-      if (edge_weight.has_value()) {
-        for (size_t i = begin; i < end; ++i) {
-          sampler.biased_sample(
-              /*global_src_node=*/sampled_nodes[i],
-              /*local_src_node=*/i,
-              /*edge_weight=*/edge_weight.value(),
-              /*count=*/count,
-              /*dst_mapper=*/mapper,
-              /*generator=*/generator,
-              /*out_global_dst_nodes=*/sampled_nodes);
-          if constexpr (distributed)
-            cumsum_neighbors_per_node.push_back(sampled_nodes.size());
-        }
-      } else if (!time.has_value()) {
         for (size_t i = begin; i < end; ++i) {
           sampler.uniform_sample(
               /*global_src_node=*/sampled_nodes[i],
@@ -392,28 +392,7 @@ sample(const at::Tensor& rowptr,
               /*dst_mapper=*/mapper,
               /*generator=*/generator,
               /*out_global_dst_nodes=*/sampled_nodes);
-          if constexpr (distributed)
-            cumsum_neighbors_per_node.push_back(sampled_nodes.size());
         }
-      } else if constexpr (!std::is_scalar<node_t>::value) {  // Temporal:
-        const auto time_data = time.value().data_ptr<temporal_t>();
-        for (size_t i = begin; i < end; ++i) {
-          const auto batch_idx = sampled_nodes[i].first;
-          sampler.temporal_sample(
-              /*global_src_node=*/sampled_nodes[i],
-              /*local_src_node=*/i, /*count=*/count,
-              /*seed_time=*/seed_times[batch_idx],
-              /*time=*/time_data,
-              /*dst_mapper=*/mapper,
-              /*generator=*/generator,
-              /*out_global_dst_nodes=*/sampled_nodes);
-          if constexpr (distributed)
-            cumsum_neighbors_per_node.push_back(sampled_nodes.size());
-        }
-      }
-      //std::chrono::steady_clock::time_point ell_par_end = std::chrono::steady_clock::now();
-      //std::chrono::steady_clock::time_point ell_end = std::chrono::steady_clock::now();
-      //std::cout << "Time for ell=" << ell << ": parallel=" << std::chrono::duration_cast<std::chrono::microseconds>(ell_par_end - ell_begin).count() << "; total=" << std::chrono::duration_cast<std::chrono::microseconds>(ell_end - ell_begin).count() << std::endl;
       begin = end, end = sampled_nodes.size();
       num_sampled_nodes_per_hop.push_back(end - begin);
     }
