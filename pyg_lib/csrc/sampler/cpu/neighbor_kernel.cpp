@@ -121,6 +121,43 @@ class NeighborSampler {
     }
   }
 
+  void update_sampled_edges(
+      std::vector<std::vector<int64_t>>& num_sampled_nodes,
+      std::vector<std::vector<int64_t>>& increment_values) {
+        for(int64_t subgraph_idx=0; subgraph_idx < num_sampled_nodes.size(); ++subgraph_idx){
+	  for(int64_t edge_idx=0; edge_idx<sampled_cols_vec_[subgraph_idx].size();++edge_idx){
+	    
+	    int64_t inc_col_idx=0;
+	    for(int64_t inc_idx=increment_values[subgraph_idx].size()-2;inc_idx>=0; --inc_idx){
+	      if(sampled_cols_vec_[subgraph_idx][edge_idx]>num_sampled_nodes[subgraph_idx][inc_idx]){
+		inc_col_idx = inc_idx+1;
+		break;
+	      }
+	    }
+	    sampled_cols_vec_[subgraph_idx][edge_idx] += increment_values[subgraph_idx][inc_col_idx];
+	    
+	    int64_t inc_row_idx=0;
+	    for(int64_t inc_idx=increment_values[subgraph_idx].size()-2;inc_idx>=0; --inc_idx){
+	      if(sampled_rows_vec_[subgraph_idx][edge_idx]>num_sampled_nodes[subgraph_idx][inc_idx]){
+                inc_row_idx = inc_idx+1;
+		break;
+	      }
+	    }
+	    sampled_rows_vec_[subgraph_idx][edge_idx] += increment_values[subgraph_idx][inc_row_idx];
+	  }
+	}
+  }
+
+  void concat_results(std::vector<std::vector<int64_t>>& sampled_edges_size,
+		      int64_t total_num_edges) {
+	  _concat_results(sampled_rows_vec_, sampled_rows_, sampled_edges_size, total_num_edges);
+	  _concat_results(sampled_cols_vec_, sampled_cols_, sampled_edges_size, total_num_edges);
+	  if(save_edges){
+		_concat_results(sampled_edge_ids_vec_, sampled_edge_ids_, sampled_edges_size, total_num_edges);
+	  }
+
+  }
+
  private:
   inline scalar_t to_scalar_t(const scalar_t& node) { return node; }
   inline scalar_t to_scalar_t(const std::pair<scalar_t, scalar_t>& node) {
@@ -134,6 +171,22 @@ class NeighborSampler {
       const scalar_t& node,
       const std::pair<scalar_t, scalar_t>& ref) {
     return {std::get<0>(ref), node};
+  }
+
+  void _concat_results(std::vector<std::vector<scalar_t>>& sampled_edges_vec,
+                       std::vector<scalar_t>& sampled_edges,
+                       std::vector<std::vector<int64_t>>& sampled_edges_size,
+		       int64_t total_num_edges) {
+    sampled_edges.reserve(total_num_edges+1);
+    for (size_t ell = 0; ell < sampled_edges_size[0].size(); ++ell) {
+      for (auto i = 0; i < sampled_edges_size.size(); ++i) {
+        int64_t beg = ell > 0 ? sampled_edges_size[i][ell - 1] : 0;
+        int64_t end = sampled_edges_size[i][ell];
+        std::copy(sampled_edges_vec[i].begin() + beg,
+                  sampled_edges_vec[i].begin() + end,
+                  std::back_inserter(sampled_edges));
+      }
+    }
   }
 
   void _sample(const node_t global_src_node,
@@ -272,6 +325,9 @@ class NeighborSampler {
   std::vector<scalar_t> sampled_edge_ids_;
 
  public:
+  std::vector<std::vector<scalar_t>> sampled_rows_vec_;
+  std::vector<std::vector<scalar_t>> sampled_cols_vec_;
+  std::vector<std::vector<scalar_t>> sampled_edge_ids_vec_;
   std::vector<int64_t> num_sampled_edges_per_hop;
 };
 
@@ -342,7 +398,7 @@ sample(const at::Tensor& rowptr,
     pyg::random::RandintEngine<scalar_t> generator;
 
     std::vector<node_t> sampled_nodes;
-    auto mapper = Mapper<node_t, scalar_t>(/*num_nodes=*/rowptr.size(0) - 1);
+    //auto mapper = Mapper<node_t, scalar_t>(rowptr.size(0) - 1);
     auto sampler =
         NeighborSamplerImpl(rowptr.data_ptr<scalar_t>(),
                             col.data_ptr<scalar_t>(), temporal_strategy);
@@ -358,7 +414,7 @@ sample(const at::Tensor& rowptr,
       for (size_t i = 0; i < seed.numel(); ++i) {
 //	std::pair<scalar_t, scalar_t> seed_node{0, seed_data[i]};
         subgraph_sampled_nodes[i].push_back({0, seed_data[i]});
-        mapper.insert({i, seed_data[i]});
+        //mapper.insert({i, seed_data[i]});
 	num_nodes[i].push_back(1);
       } 
       }
@@ -377,25 +433,83 @@ sample(const at::Tensor& rowptr,
 
     num_sampled_nodes_per_hop.push_back(seed.numel());
     
+    //size_t begin = 0, end = seed.size(0);
+    
     auto chunk_size = seed_size / at::get_num_threads();
-    size_t begin = 0, end = seed.size(0);
 
-    for (size_t ell = 0; ell < num_neighbors.size(); ++ell) {
-	//    std::chrono::steady_clock::time_point ell_begin = std::chrono::steady_clock::now();
-	const auto count = num_neighbors[ell];
-      sampler.num_sampled_edges_per_hop.push_back(0);
-        for (size_t i = begin; i < end; ++i) {
-          sampler.uniform_sample(
-              /*global_src_node=*/sampled_nodes[i],
-              /*local_src_node=*/i,
-              /*count=*/count,
-              /*dst_mapper=*/mapper,
-              /*generator=*/generator,
-              /*out_global_dst_nodes=*/sampled_nodes);
+    at::parallel_for(0, seed_size, chunk_size, [&](size_t _s, size_t _e) {
+      pyg::random::RandintEngine<scalar_t> generator;
+      auto ell_size = num_neighbors.size();
+      for (auto j = _s; j < _e; j++) {
+        int64_t scope_begin(0);
+	int node_counter = j;
+	auto mapper = Mapper<node_t, scalar_t>(/*num_nodes=*/rowptr.size(0) - 1);
+	if constexpr (!std::is_scalar<node_t>::value) {
+	  mapper.insert({j, seed_data[j]});
+	}
+        for (size_t ell = 0; ell < num_neighbors.size(); ++ell) {
+	  const auto count = num_neighbors[ell];
+          sampler.num_sampled_edges_per_hop.push_back(0);
+            for (auto i = scope_begin; i < num_nodes[j].back(); ++i) {
+               sampler.uniform_sample(
+                  /*global_src_node=*/subgraph_sampled_nodes[j][i],
+                  /*local_src_node=*/i,
+                  /*count=*/count,
+                  /*dst_mapper=*/mapper,
+                  /*generator=*/generator,
+                  /*out_global_dst_nodes=*/subgraph_sampled_nodes[j]);
+          }
+          scope_begin = num_nodes[j].back();
+	  num_nodes[j].push_back(subgraph_sampled_nodes[j].size());
+          sampled_edges_size[j].push_back(sampler.sampled_cols_vec_[j].size());
+	  //num_sampled_nodes_per_hop.push_back(end - begin);
         }
-      begin = end, end = sampled_nodes.size();
-      num_sampled_nodes_per_hop.push_back(end - begin);
+      }
+    });
+
+// SEMI-DISJOINT POSTPROCESSING
+
+
+
+
+  int64_t total_num_nodes = 0;
+  int64_t total_num_edges = 0;
+  for (size_t seed_idx = 0; seed_idx < seed_size; seed_idx++) {
+	total_num_nodes += num_nodes[seed_idx].back();
+	total_num_edges += sampled_edges_size[seed_idx].back();
+  }
+
+// concatenate sampled nodes
+  sampled_nodes.reserve(total_num_nodes + 1);
+  for (size_t ell = 0; ell < num_neighbors.size(); ++ell) {
+     for (size_t seed_idx = 0; seed_idx < seed_size; seed_idx++) {
+	     std::copy(subgraph_sampled_nodes[seed_idx].begin() + num_nodes[seed_idx][ell], 
+			subgraph_sampled_nodes[seed_idx].begin() + num_nodes[seed_idx][ell+1],
+			std::back_inserter(sampled_nodes));
     }
+  }
+// concatenate sampled_rows_, sampled_cols_ and sampled_edge_ids_
+  std::vector<std::vector<int64_t>> increment_values(seed_size);
+  int64_t increment_value = 0;
+  for (size_t seed_idx = 0; seed_idx < seed_size; seed_idx++) {
+        increment_values[seed_idx].push_back(increment_value);
+	increment_value += num_nodes[seed_idx][0];
+  }
+  for (size_t ell = 1; ell <= num_neighbors.size(); ++ell) {
+    for (size_t seed_idx = 0; seed_idx < seed_size; seed_idx++) {
+	increment_value -= num_nodes[seed_idx][ell-1];
+        increment_values[seed_idx].push_back(increment_value);
+	increment_value += num_nodes[seed_idx][ell];
+    }
+  } 
+  //std::cout << "After creation of increment_vales" << std::endl;
+  sampler.update_sampled_edges(num_nodes, increment_values);
+  //std::cout << "After updates of sampled col and row vec" << std::endl;
+  
+  sampler.concat_results(sampled_edges_size, total_num_edges);  // move content to get_sampled_edges()
+  //std::cout << "End of parallel sampler" << std::endl;
+
+
 
     out_node_id = pyg::utils::from_vector(sampled_nodes);
     TORCH_CHECK(directed, "Undirected subgraphs not yet supported");
