@@ -1,5 +1,6 @@
 #include <ATen/ATen.h>
 #include <gtest/gtest.h>
+#include <omp.h>
 
 #include "pyg_lib/csrc/sampler/neighbor.h"
 #include "pyg_lib/csrc/utils/types.h"
