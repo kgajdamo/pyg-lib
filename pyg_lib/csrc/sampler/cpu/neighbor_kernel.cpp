@@ -110,11 +110,11 @@ class NeighborSampler {
   std::tuple<at::Tensor, at::Tensor, c10::optional<at::Tensor>>
   get_sampled_edges(bool csc = false) {
     TORCH_CHECK(save_edges, "No edges have been stored")
-    const auto row = pyg::utils::from_vector(sampled_rows_, true);
-    const auto col = pyg::utils::from_vector(sampled_cols_, true);
+    const auto row = pyg::utils::from_vector(sampled_rows_);
+    const auto col = pyg::utils::from_vector(sampled_cols_);
     c10::optional<at::Tensor> edge_id = c10::nullopt;
     if (save_edge_ids) {
-      edge_id = pyg::utils::from_vector(sampled_edge_ids_, true);
+      edge_id = pyg::utils::from_vector(sampled_edge_ids_);
     }
     if (!csc) {
       return std::make_tuple(row, col, edge_id);
@@ -131,26 +131,28 @@ class NeighborSampler {
       for (int64_t edge_idx = 0;
            edge_idx < sampled_cols_vec_[subgraph_idx].size(); ++edge_idx) {
         int64_t inc_col_idx = 0;
-        for (int64_t inc_idx = increment_values[subgraph_idx].size() - 2;
-             inc_idx >= 0; --inc_idx) {
-          if (sampled_cols_vec_[subgraph_idx][edge_idx] >=
-              num_sampled_nodes[subgraph_idx][inc_idx]) {
-            inc_col_idx = inc_idx + 1;
-            break;
-          }
-        }
-        sampled_cols_vec_[subgraph_idx][edge_idx] +=
-            increment_values[subgraph_idx][inc_col_idx];
-
         int64_t inc_row_idx = 0;
         for (int64_t inc_idx = increment_values[subgraph_idx].size() - 2;
              inc_idx >= 0; --inc_idx) {
-          if (sampled_rows_vec_[subgraph_idx][edge_idx] >=
-              num_sampled_nodes[subgraph_idx][inc_idx]) {
+          if (inc_col_idx == 0 &&
+              sampled_cols_vec_[subgraph_idx][edge_idx] >=
+                  num_sampled_nodes[subgraph_idx][inc_idx]) {
+            inc_col_idx = inc_idx + 1;
+            // std::cout<<"col ";
+          }
+          if (inc_row_idx == 0 &&
+              sampled_rows_vec_[subgraph_idx][edge_idx] >=
+                  num_sampled_nodes[subgraph_idx][inc_idx]) {
             inc_row_idx = inc_idx + 1;
+            // std::cout<<"row ";
+          }
+          if (inc_col_idx && inc_row_idx) {
             break;
           }
         }
+
+        sampled_cols_vec_[subgraph_idx][edge_idx] +=
+            increment_values[subgraph_idx][inc_col_idx];
         sampled_rows_vec_[subgraph_idx][edge_idx] +=
             increment_values[subgraph_idx][inc_row_idx];
       }
@@ -187,16 +189,16 @@ class NeighborSampler {
 
   void _concat_results(std::vector<std::vector<scalar_t>>& sampled_rows_vec,
                        std::vector<std::vector<scalar_t>>& sampled_cols_vec,
-                       std::vector<std::vector<scalar_t>>& sampled_edges_vec,
+                       std::vector<std::vector<scalar_t>>& sampled_edge_ids_vec,
                        std::vector<scalar_t>& sampled_rows,
                        std::vector<scalar_t>& sampled_cols,
-                       std::vector<scalar_t>& sampled_edges,
+                       std::vector<scalar_t>& sampled_edge_ids,
                        std::vector<std::vector<int64_t>>& sampled_edges_size,
                        int64_t total_num_edges) {
     sampled_rows.reserve(total_num_edges + 1);
     sampled_cols.reserve(total_num_edges + 1);
-    if (save_edges) {
-      sampled_edges.reserve(total_num_edges + 1);
+    if constexpr (save_edges) {
+      sampled_edge_ids.reserve(total_num_edges + 1);
     }
     for (size_t ell = 0; ell < sampled_edges_size[0].size(); ++ell) {
       for (auto i = 0; i < sampled_edges_size.size(); ++i) {
@@ -208,10 +210,10 @@ class NeighborSampler {
         std::copy(sampled_cols_vec[i].begin() + beg,
                   sampled_cols_vec[i].begin() + end,
                   std::back_inserter(sampled_cols));
-        if (save_edges) {
-          std::copy(sampled_edges_vec[i].begin() + beg,
-                    sampled_edges_vec[i].begin() + end,
-                    std::back_inserter(sampled_edges));
+        if constexpr (save_edges) {
+          std::copy(sampled_edge_ids_vec[i].begin() + beg,
+                    sampled_edge_ids_vec[i].begin() + end,
+                    std::back_inserter(sampled_edge_ids));
         }
       }
     }
@@ -542,12 +544,12 @@ sample(const at::Tensor& rowptr,
        const bool csc,
        const std::string temporal_strategy,
        const bool old) {
-  // if (old) {
-  //   return sample_old<replace, directed, disjoint, return_edge_id,
-  //   distributed>(
-  //       rowptr, col, seed, num_neighbors, time, seed_time, edge_weight, csc,
-  //       temporal_strategy);
-  // }
+  if (old) {
+    return sample_old<replace, directed, disjoint, return_edge_id,
+    distributed>(
+        rowptr, col, seed, num_neighbors, time, seed_time, edge_weight, csc,
+        temporal_strategy);
+  }
   // std::chrono::steady_clock::time_point sampl_begin =
   //     std::chrono::steady_clock::now();
   TORCH_CHECK(!time.has_value() || disjoint,
@@ -701,7 +703,7 @@ sample(const at::Tensor& rowptr,
             subgraph_sampled_nodes[seed_idx].begin() +
                 num_nodes[seed_idx][ell + 1],
             std::back_inserter(sampled_nodes));
-        // if (ell != 0)
+
         num_sampled_nodes_per_hop[ell + 1] +=
             num_nodes[seed_idx][ell + 1] - num_nodes[seed_idx][ell];
 
