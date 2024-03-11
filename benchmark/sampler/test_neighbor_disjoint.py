@@ -29,11 +29,11 @@ argparser.add_argument(
     default=[
         # [3, 2],
         [-1],
-        # [10, 10],
-        [-1, -1],
-        [-1, -1, -1],
-        # [15, 10, 5],
-        # [20, 15, 10],
+        [10, 10],
+        # [-1, -1],
+        # [-1, -1, -1],
+        [15, 10, 5],
+        [20, 15, 10],
     ])
 argparser.add_argument('--replace', action='store_true')
 argparser.add_argument('--shuffle', action='store_true')
@@ -109,37 +109,38 @@ def test_neighbor(dataset, **kwargs):
                     return_edge_id=True,
                     old=False,
                 )
-                batch_disjoint_old = pyg_lib.sampler.neighbor_sample(
-                    rowptr,
-                    col,
-                    seed,
-                    num_neighbors,
-                    time=node_time,
-                    seed_time=None,
-                    edge_weight=edge_weight,
-                    replace=args.replace,
-                    directed=args.directed,
-                    disjoint=args.disjoint,
-                    temporal_strategy=args.temporal_strategy,
-                    return_edge_id=True,
-                    old=True,
-                )
+                # batch_disjoint_old = pyg_lib.sampler.neighbor_sample(
+                #     rowptr,
+                #     col,
+                #     seed,
+                #     num_neighbors,
+                #     time=node_time,
+                #     seed_time=None,
+                #     edge_weight=edge_weight,
+                #     replace=args.replace,
+                #     directed=args.directed,
+                #     disjoint=args.disjoint,
+                #     temporal_strategy=args.temporal_strategy,
+                #     return_edge_id=True,
+                #     old=True,
+                # )
 
-                for i in range(len(batch_disjoint_mt)):
-                    # print(f'{i}, old={batch_disjoint_old[i]}')
-                    # print(f'{i}, mt={batch_disjoint_mt[i]}')
-                    # print("")
-                    if torch.is_tensor(batch_disjoint_mt[i]):
-                        if not torch.equal(batch_disjoint_mt[i], batch_disjoint_old[i]):
-                            with open(fname, mode="a+") as f:
-                                write = f'{i}, old={batch_disjoint_old[i]},  mt={batch_disjoint_mt[i]} \n'
-                                f.write(write)
-                    elif isinstance(batch_disjoint_mt[i], list):
-                        if batch_disjoint_mt[i] != batch_disjoint_old[i]:
-                            with open(fname, mode="a+") as f:
-                                write = f'{i}, old={batch_disjoint_old[i]},  mt={batch_disjoint_mt[i]} \n'
+                # for i in range(len(batch_disjoint_mt)):
+                #     # print(f'{i}, old={batch_disjoint_old[i]}')
+                #     # print(f'{i}, mt={batch_disjoint_mt[i]}')
+                #     # print("")
+                #     if torch.is_tensor(batch_disjoint_mt[i]):
+                #         if not torch.equal(batch_disjoint_mt[i],
+                #                            batch_disjoint_old[i]):
+                #             with open(fname, mode="a+") as f:
+                #                 write = f'{i}, old={batch_disjoint_old[i]},  mt={batch_disjoint_mt[i]} \n'
+                #                 f.write(write)
+                #     elif isinstance(batch_disjoint_mt[i], list):
+                #         if batch_disjoint_mt[i] != batch_disjoint_old[i]:
+                #             with open(fname, mode="a+") as f:
+                #                 write = f'{i}, old={batch_disjoint_old[i]},  mt={batch_disjoint_mt[i]} \n'
 
-                                f.write(write)
+                #                 f.write(write)
 
                 #total_edges_sampled += batch[0].shape[0]
                 #import pdb; pdb.set_trace()

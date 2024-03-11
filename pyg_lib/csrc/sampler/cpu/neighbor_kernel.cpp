@@ -1,5 +1,7 @@
 #include <ATen/ATen.h>
 #include <ATen/Parallel.h>
+#include <ATen/cpu/vec/functional.h>
+#include <ATen/cpu/vec/vec.h>
 #include <omp.h>
 #include <torch/library.h>
 #include <iostream>
@@ -126,44 +128,55 @@ class NeighborSampler {
   void update_sampled_edges(
       std::vector<std::vector<int64_t>>& num_sampled_nodes,
       std::vector<std::vector<int64_t>>& increment_values) {
-    for (int64_t subgraph_idx = 0; subgraph_idx < num_sampled_nodes.size();
-         ++subgraph_idx) {
-      for (int64_t edge_idx = 0;
-           edge_idx < sampled_cols_vec_[subgraph_idx].size(); ++edge_idx) {
-        int64_t inc_col_idx = 0;
-        int64_t inc_row_idx = 0;
-        for (int64_t inc_idx = increment_values[subgraph_idx].size() - 2;
-             inc_idx >= 0; --inc_idx) {
-          if (inc_col_idx == 0 &&
-              sampled_cols_vec_[subgraph_idx][edge_idx] >=
-                  num_sampled_nodes[subgraph_idx][inc_idx]) {
-            inc_col_idx = inc_idx + 1;
-            // std::cout<<"col ";
-          }
-          if (inc_row_idx == 0 &&
-              sampled_rows_vec_[subgraph_idx][edge_idx] >=
-                  num_sampled_nodes[subgraph_idx][inc_idx]) {
-            inc_row_idx = inc_idx + 1;
-            // std::cout<<"row ";
-          }
-          if (inc_col_idx && inc_row_idx) {
-            break;
-          }
-        }
+    auto chunk_size = num_sampled_nodes.size() / at::get_num_threads();
+    at::parallel_for(
+        0, num_sampled_nodes.size(), chunk_size, [&](size_t _s, size_t _e) {
+          for (int64_t subgraph_idx = _s; subgraph_idx < _e; ++subgraph_idx) {
+            for (int64_t edge_idx = 0;
+                 edge_idx < sampled_cols_vec_[subgraph_idx].size();
+                 ++edge_idx) {
+              int64_t inc_col_idx = 0;
+              int64_t inc_row_idx = 0;
+              for (int64_t inc_idx = increment_values[subgraph_idx].size() - 2;
+                   inc_idx >= 0; --inc_idx) {
+                if (inc_col_idx == 0 &&
+                    sampled_cols_vec_[subgraph_idx][edge_idx] >=
+                        num_sampled_nodes[subgraph_idx][inc_idx]) {
+                  inc_col_idx = inc_idx + 1;
+                }
+                if (inc_row_idx == 0 &&
+                    sampled_rows_vec_[subgraph_idx][edge_idx] >=
+                        num_sampled_nodes[subgraph_idx][inc_idx]) {
+                  inc_row_idx = inc_idx + 1;
+                }
+                if (inc_col_idx && inc_row_idx)
+                  break;
+              }
 
-        sampled_cols_vec_[subgraph_idx][edge_idx] +=
-            increment_values[subgraph_idx][inc_col_idx];
-        sampled_rows_vec_[subgraph_idx][edge_idx] +=
-            increment_values[subgraph_idx][inc_row_idx];
-      }
-    }
+              sampled_cols_vec_[subgraph_idx][edge_idx] +=
+                  increment_values[subgraph_idx][inc_col_idx];
+              sampled_rows_vec_[subgraph_idx][edge_idx] +=
+                  increment_values[subgraph_idx][inc_row_idx];
+            }
+          }
+        });
   }
 
   void concat_results(std::vector<std::vector<int64_t>>& sampled_edges_size,
                       int64_t total_num_edges) {
-    _concat_results(sampled_rows_vec_, sampled_cols_vec_, sampled_edge_ids_vec_,
-                    sampled_rows_, sampled_cols_, sampled_edge_ids_,
-                    sampled_edges_size, total_num_edges);
+    // _concat_results(sampled_rows_vec_, sampled_cols_vec_,
+    // sampled_edge_ids_vec_,
+    //                 sampled_rows_, sampled_cols_, sampled_edge_ids_,
+    //                 sampled_edges_size, total_num_edges);
+    // test_load_store();
+    _concat_results_test(sampled_rows_vec_, sampled_cols_vec_,
+                         sampled_edge_ids_vec_, sampled_rows_, sampled_cols_,
+                         sampled_edge_ids_, sampled_edges_size,
+                         total_num_edges);
+    // std::cout<<"sampled_rows="<<std::endl;
+    // for (int i=0; i<sampled_rows_.size(); i++) {
+    //   std::cout<<sampled_rows_[i]<<" ";
+    // }
     // _concat_results(sampled_cols_vec_, sampled_cols_, sampled_edges_size,
     //                 total_num_edges);
     // if (save_edges) {
@@ -195,7 +208,7 @@ class NeighborSampler {
                        std::vector<scalar_t>& sampled_edge_ids,
                        std::vector<std::vector<int64_t>>& sampled_edges_size,
                        int64_t total_num_edges) {
-    sampled_rows.reserve(total_num_edges + 1);
+    // sampled_rows.reserve(total_num_edges + 1);
     sampled_cols.reserve(total_num_edges + 1);
     if constexpr (save_edges) {
       sampled_edge_ids.reserve(total_num_edges + 1);
@@ -204,9 +217,9 @@ class NeighborSampler {
       for (auto i = 0; i < sampled_edges_size.size(); ++i) {
         int64_t beg = ell > 0 ? sampled_edges_size[i][ell - 1] : 0;
         int64_t end = sampled_edges_size[i][ell];
-        std::copy(sampled_rows_vec[i].begin() + beg,
-                  sampled_rows_vec[i].begin() + end,
-                  std::back_inserter(sampled_rows));
+        // std::copy(sampled_rows_vec[i].begin() + beg,
+        //           sampled_rows_vec[i].begin() + end,
+        //           std::back_inserter(sampled_rows));
         std::copy(sampled_cols_vec[i].begin() + beg,
                   sampled_cols_vec[i].begin() + end,
                   std::back_inserter(sampled_cols));
@@ -218,6 +231,124 @@ class NeighborSampler {
       }
     }
   }
+
+  void copy_data(const float* src, float* dst, size_t count) {
+    using Vec = at::vec::Vectorized<float>;
+    constexpr size_t VecSize = sizeof(Vec) / sizeof(float);
+
+    for (size_t i = 0; i < count; i += VecSize) {
+      // Load data from source
+      Vec data = Vec::loadu(src + i);
+
+      // Store data to destination
+      data.store(dst + i);
+    }
+  }
+
+  void _concat_results_test(
+      std::vector<std::vector<scalar_t>>& sampled_rows_vec,
+      std::vector<std::vector<scalar_t>>& sampled_cols_vec,
+      std::vector<std::vector<scalar_t>>& sampled_edge_ids_vec,
+      std::vector<scalar_t>& sampled_rows,
+      std::vector<scalar_t>& sampled_cols,
+      std::vector<scalar_t>& sampled_edge_ids,
+      std::vector<std::vector<int64_t>>& sampled_edges_size,
+      int64_t total_num_edges) {
+    sampled_rows.resize(total_num_edges);
+    sampled_cols.resize(total_num_edges);
+    if constexpr (save_edges) {
+      sampled_edge_ids.resize(total_num_edges);
+    }
+    sampled_edge_ids.resize(total_num_edges);
+    int idx = 0;
+    for (size_t ell = 0; ell < sampled_edges_size[0].size(); ++ell) {
+      for (auto i = 0; i < sampled_edges_size.size(); ++i) {
+        int64_t shift = ell > 0 ? sampled_edges_size[i][ell - 1] : 0;
+        int64_t end = sampled_edges_size[i][ell];
+        auto range = end - shift;
+#pragma omp simd
+        for (auto j = 0; j < range; j++) {
+          sampled_rows[idx] = sampled_rows_vec[i][shift];
+          sampled_cols[idx] = sampled_cols_vec[i][shift];
+          if constexpr (save_edges) {
+            sampled_edge_ids[idx] = sampled_edge_ids_vec[i][shift];
+          }
+          shift += 1;
+          idx += 1;
+        }
+      }
+    }
+  }
+
+  // void _concat_results_test(std::vector<std::vector<scalar_t>>&
+  // sampled_rows_vec,
+  //                      std::vector<std::vector<scalar_t>>& sampled_cols_vec,
+  //                      std::vector<std::vector<scalar_t>>&
+  //                      sampled_edge_ids_vec, std::vector<scalar_t>&
+  //                      sampled_rows, std::vector<scalar_t>& sampled_cols,
+  //                      std::vector<scalar_t>& sampled_edge_ids,
+  //                      std::vector<std::vector<int64_t>>& sampled_edges_size,
+  //                      int64_t total_num_edges) {
+  //   using Vec = at::vec::Vectorized<scalar_t>;
+
+  //   std::cout<<"total_num_edges="<<total_num_edges<<std::endl;
+  //   sampled_rows.resize(total_num_edges);
+  //   // sampled_cols.resize(total_num_edges + 1);
+  //   // if constexpr (save_edges) {
+  //   //   sampled_edge_ids.resize(total_num_edges + 1);
+  //   // }
+  //   // at::vec::Vectorized<scalar_t> sampled_rows_vectorized;
+
+  //   size_t edge_shift = 0;
+  //   // auto window_elem = 64 / sizeof(scalar_t);
+  //   constexpr size_t window_elem = sizeof(Vec) / sizeof(scalar_t);
+  //   std::cout<<"window_elem="<<window_elem<<", type_name="<<std::endl; // 4
+
+  // for (size_t ell = 0; ell < sampled_edges_size[0].size(); ++ell) {
+  //   for (auto i = 0; i < sampled_edges_size.size(); ++i) {
+  //     int64_t beg = ell > 0 ? sampled_edges_size[i][ell - 1] : 0; // 0
+  //     int64_t end = sampled_edges_size[i][ell]; // 2
+  //     int64_t vectorized_size = end-beg; // 2-0 = 2
+  //     // for (size_t idx=0; idx < vectorized_size; idx += window_elem) { //
+  //     idx = {0}
+  //       std::cout<<"sampled_rows_vec[i]="<<sampled_rows_vec[i]<<std::endl;
+
+  //       Vec sampled_rows_data_test;
+  //       std::memcpy(sampled_rows_data_test, sampled_rows_vec[i].data(), end -
+  //       beg); std::cout<<"sampled_rows_data_test="<<std::endl;
+  //       std::cout<<sampled_rows_data_test<<std::endl;
+  //       std::cout<<"end - beg="<<std::endl;
+  //       std::cout<<(end - beg)<<std::endl;
+  // std::cout<<"sizeof(Vec)="<<std::endl;
+  // std::cout<<sizeof(Vec)<<std::endl;
+
+  // // Load data from source
+  // Vec sampled_rows_data = Vec::loadu(sampled_rows_vec[i].data() + beg, end -
+  // beg); std::cout<<"sampled_rows_data="<<std::endl;
+  // std::cout<<sampled_rows_data<<std::endl;
+  // // Vec out_row;
+  // // std::cout<<"here2"<<std::endl;
+  // sampled_rows_data.store(sampled_rows.data() + edge_shift + beg, end - beg);
+  // edge_shift += vectorized_size;
+  // std::cout<<"not ready sampled_rows="<<std::endl;
+  // std::cout<<sampled_rows<<std::endl;
+
+  // std::copy(sampled_rows_vec[i].begin() + beg,
+  //         sampled_rows_vec[i].begin() + end,
+  //         std::back_inserter(sampled_rows));
+  // std::copy(sampled_cols_vec[i].begin() + beg,
+  //           sampled_cols_vec[i].begin() + end,
+  //           std::back_inserter(sampled_cols));
+  // if constexpr (save_edges) {
+  //   std::copy(sampled_edge_ids_vec[i].begin() + beg,
+  //             sampled_edge_ids_vec[i].begin() + end,
+  //             std::back_inserter(sampled_edge_ids));
+  // }
+  // }
+  //     }
+  //   }
+  //   std::cout<<"end"<<std::endl;
+  // }
 
   void _sample(const node_t global_src_node,
                const scalar_t local_src_node,
@@ -544,12 +675,13 @@ sample(const at::Tensor& rowptr,
        const bool csc,
        const std::string temporal_strategy,
        const bool old) {
-  if (old) {
-    return sample_old<replace, directed, disjoint, return_edge_id,
-    distributed>(
-        rowptr, col, seed, num_neighbors, time, seed_time, edge_weight, csc,
-        temporal_strategy);
-  }
+  // std::cout<<"return_edgge_id="<<return_edge_id<<std::endl;
+  // if (old) {
+  //   return sample_old<replace, directed, disjoint, return_edge_id,
+  //   distributed>(
+  //       rowptr, col, seed, num_neighbors, time, seed_time, edge_weight, csc,
+  //       temporal_strategy);
+  // }
   // std::chrono::steady_clock::time_point sampl_begin =
   //     std::chrono::steady_clock::now();
   TORCH_CHECK(!time.has_value() || disjoint,
@@ -670,7 +802,6 @@ sample(const at::Tensor& rowptr,
           scope_begin = num_nodes[j].back();
           num_nodes[j].push_back(subgraph_sampled_nodes[j].size());
           sampled_edges_size[j].push_back(sampler.sampled_cols_vec_[j].size());
-          // num_sampled_nodes_per_hop.push_back(end - begin);
         }
       }
     });
@@ -687,7 +818,7 @@ sample(const at::Tensor& rowptr,
 
     // std::cout<<"sampled_edges_size="<<std::endl;
     // for (auto i=0; i<sampled_edges_size.size(); i++) {
-    //   std::cout<<"i="<<i<<std::endl;
+    //   std::cout<<"subgraph id="<<i<<std::endl;
     //   for (auto j=0; j<sampled_edges_size[i].size(); j++) {
     //     std::cout<<sampled_edges_size[i][j]<<" ";
     //   }
@@ -741,13 +872,14 @@ sample(const at::Tensor& rowptr,
     //   std::cout << " " << sc << " " << std::endl;
     // }
 
+    // std::a << "After creation of increment_vales" << std::endl;
+    sampler.update_sampled_edges(num_nodes, increment_values);
+    // std::cout << "After updates of sampled col and row vec" << std::endl;
+
     // std::cout << "sampled_rows_vec_:" << std::endl;
     // for (auto sr : sampler.sampled_rows_vec_) {
     //   std::cout << " " << sr << " " << std::endl;
     // }
-    // std::a << "After creation of increment_vales" << std::endl;
-    sampler.update_sampled_edges(num_nodes, increment_values);
-    // std::cout << "After updates of sampled col and row vec" << std::endl;
 
     sampler.concat_results(
         sampled_edges_size,

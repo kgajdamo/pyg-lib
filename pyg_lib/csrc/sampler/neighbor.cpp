@@ -36,8 +36,6 @@ neighbor_sample(const at::Tensor& rowptr,
   at::checkAllDefined(c, {rowptr_t, col_t, seed_t});
   at::checkAllSameType(c, {rowptr_t, col_t, seed_t});
 
-  std::cout << "here1" << std::endl;
-
   static auto op = c10::Dispatcher::singleton()
                        .findSchemaOrThrow("pyg::neighbor_sample", "")
                        .typed<decltype(neighbor_sample)>();
