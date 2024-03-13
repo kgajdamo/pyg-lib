@@ -22,6 +22,7 @@ def neighbor_sample(
     disjoint: bool = False,
     temporal_strategy: str = 'uniform',
     return_edge_id: bool = True,
+    old: bool = True,
 ) -> Tuple[Tensor, Tensor, Tensor, Optional[Tensor], List[int], List[int]]:
     r"""Recursively samples neighbors from all node indices in :obj:`seed`
     in the graph given by :obj:`(rowptr, col)`.
@@ -78,7 +79,8 @@ def neighbor_sample(
     return torch.ops.pyg.neighbor_sample(rowptr, col, seed, num_neighbors,
                                          time, seed_time, edge_weight, csc,
                                          replace, directed, disjoint,
-                                         temporal_strategy, return_edge_id)
+                                         temporal_strategy, return_edge_id,
+                                         old)
 
 
 def hetero_neighbor_sample(

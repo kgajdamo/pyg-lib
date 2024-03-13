@@ -29,7 +29,8 @@ neighbor_sample(const at::Tensor& rowptr,
                 bool directed = true,
                 bool disjoint = false,
                 std::string strategy = "uniform",
-                bool return_edge_id = true);
+                bool return_edge_id = true,
+                bool old = true);
 
 // Recursively samples neighbors from all node indices in `seed_dict`
 // in the heterogeneous graph given by `(rowptr_dict, col_dict)`.
@@ -79,7 +80,8 @@ std::tuple<at::Tensor, at::Tensor, std::vector<int64_t>> dist_neighbor_sample(
     bool replace = false,
     bool directed = true,
     bool disjoint = false,
-    std::string strategy = "uniform");
+    std::string strategy = "uniform",
+    bool old = true);
 
 }  // namespace sampler
 }  // namespace pyg

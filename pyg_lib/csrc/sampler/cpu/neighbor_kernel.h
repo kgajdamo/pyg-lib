@@ -23,7 +23,8 @@ neighbor_sample_kernel(const at::Tensor& rowptr,
                        bool directed,
                        bool disjoint,
                        std::string temporal_strategy,
-                       bool return_edge_id);
+                       bool return_edge_id,
+                       bool old);
 
 std::tuple<c10::Dict<rel_type, at::Tensor>,
            c10::Dict<rel_type, at::Tensor>,
@@ -60,7 +61,8 @@ dist_neighbor_sample_kernel(const at::Tensor& rowptr,
                             bool replace,
                             bool directed,
                             bool disjoint,
-                            std::string temporal_strategy);
+                            std::string temporal_strategy,
+                            bool old);
 
 }  // namespace sampler
 }  // namespace pyg
