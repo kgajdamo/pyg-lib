@@ -178,8 +178,6 @@ class NeighborSampler {
     // }
   }
 
-  // void update_edges_and_concat_results() {}
-
   void _concat_results_merged(
       std::vector<std::vector<scalar_t>>& sampled_rows_vec,
       std::vector<std::vector<scalar_t>>& sampled_cols_vec,
@@ -242,39 +240,163 @@ class NeighborSampler {
     }
   }
 
-  // void update_edges_robert(
-  //     std::vector<std::vector<int64_t>>& num_sampled_nodes,
-  //     std::vector<std::vector<int64_t>>& increment_values) {
-  //   for (int64_t subgraph_idx = 0; subgraph_idx < num_sampled_nodes.size();
-  //        ++subgraph_idx) {  // {0, 1, 2} -> 0, 1
-  //     for (int64_t edge_idx = 0;
-  //          edge_idx < sampled_cols_vec_[subgraph_idx].size();
-  //          ++edge_idx) {  // {0, ..., 6} -> 0, 1
-  //       int64_t inc_col_idx = 0;
-  //       for (int64_t inc_idx = increment_values[subgraph_idx].size() - 2;
-  //            inc_idx >= 0; --inc_idx) {  // {1, 0} -> 1
-  //         if (sampled_cols_vec_[subgraph_idx][edge_idx] >=
-  //             num_sampled_nodes[subgraph_idx][inc_idx]) {  // 1 >= 1
-  //           inc_col_idx = inc_idx + 1;                     // 1 + 1 = 2
-  //           break;
-  //         }
-  //       }
-  //       sampled_cols_vec_[subgraph_idx][edge_idx] +=
-  //           increment_values[subgraph_idx][inc_col_idx];
+  void _concat_results_merged_layer_parallel_and_simd(
+      std::vector<std::vector<scalar_t>>& sampled_rows_vec,
+      std::vector<std::vector<scalar_t>>& sampled_cols_vec,
+      std::vector<std::vector<scalar_t>>& sampled_edge_ids_vec,
+      std::vector<scalar_t>& sampled_rows,
+      std::vector<scalar_t>& sampled_cols,
+      std::vector<scalar_t>& sampled_edge_ids,
+      std::vector<std::vector<int64_t>>& sampled_edges_size,
+      std::vector<std::vector<int64_t>>& num_sampled_nodes,
+      std::vector<std::vector<int64_t>>& increment_values,
+      int64_t total_num_edges) {
+    sampled_rows.resize(total_num_edges);
+    sampled_cols.resize(total_num_edges);
+    sampled_edge_ids.resize(total_num_edges);
 
-  //       int64_t inc_row_idx = 0;
-  //       for (int64_t inc_idx = increment_values[subgraph_idx].size() - 2;
-  //            inc_idx >= 0; --inc_idx) {  // {1, 0} -> 1, 0
-  //         if (sampled_rows_vec_[subgraph_idx][edge_idx] >=
-  //             num_sampled_nodes[subgraph_idx][inc_idx]) {
-  //           inc_row_idx = inc_idx + 1;
-  //           break;
+    std::vector<int64_t> parallel_ranges = {0};
+
+    for (auto i = 0; i < sampled_edges_size[0].size() - 1; ++i) {
+      int64_t begin_range = 0;
+#pragma omp simd reduction(+ : begin_range)
+      for (auto j = 0; j < sampled_edges_size.size(); ++j) {
+        begin_range += sampled_edges_size[j][i];
+      }
+      parallel_ranges.push_back(begin_range);
+    }
+
+    at::parallel_for(
+        0, sampled_edges_size[0].size(), 1, [&](size_t _s, size_t _e) {
+          for (size_t ell = _s; ell < _e; ++ell) {
+            int idx = parallel_ranges[ell];
+            for (auto subgraph_idx = 0;
+                 subgraph_idx < sampled_edges_size.size(); ++subgraph_idx) {
+              int64_t edge_idx =
+                  ell > 0 ? sampled_edges_size[subgraph_idx][ell - 1] : 0;
+              int64_t end = sampled_edges_size[subgraph_idx][ell];
+              auto range = end - edge_idx;
+              for (auto j = 0; j < range; ++j) {
+                int64_t inc_col_idx = 0;
+                for (int64_t inc_idx =
+                         increment_values[subgraph_idx].size() - 2;
+                     inc_idx >= 0; --inc_idx) {
+                  if (sampled_cols_vec_[subgraph_idx][edge_idx] >=
+                      num_sampled_nodes[subgraph_idx][inc_idx]) {
+                    inc_col_idx = inc_idx + 1;
+                    break;
+                  }
+                }
+                sampled_cols[idx] = sampled_cols_vec_[subgraph_idx][edge_idx] +
+                                    increment_values[subgraph_idx][inc_col_idx];
+
+                int64_t inc_row_idx = 0;
+                for (int64_t inc_idx =
+                         increment_values[subgraph_idx].size() - 2;
+                     inc_idx >= 0; --inc_idx) {
+                  if (sampled_rows_vec_[subgraph_idx][edge_idx] >=
+                      num_sampled_nodes[subgraph_idx][inc_idx]) {
+                    inc_row_idx = inc_idx + 1;
+                    break;
+                  }
+                }
+                sampled_rows[idx] = sampled_rows_vec_[subgraph_idx][edge_idx] +
+                                    increment_values[subgraph_idx][inc_row_idx];
+
+                if (save_edge_ids) {
+                  sampled_edge_ids[idx] =
+                      sampled_edge_ids_vec_[subgraph_idx][edge_idx];
+                }
+
+                edge_idx += 1;
+                idx += 1;
+              }
+            }
+          }
+        });
+  }
+
+  // void _concat_results_merged_writing_directly_to_tensors(
+  //     std::vector<std::vector<int64_t>>& num_sampled_nodes,
+  //     std::vector<std::vector<int64_t>>& increment_values,
+  //     at::Tensor& out_row,
+  //     at::Tensor& out_col,
+  //     at::Tensor& out_node_id,
+  //     c10::optional<at::Tensor>& out_edge_id,
+  //     int64_t total_num_edges) {
+  //   // sampled_rows.resize(total_num_edges);
+  //   // sampled_cols.resize(total_num_edges);
+  //   // sampled_edge_ids.resize(total_num_edges);
+
+  //   out_row = at::empty({total_num_edges},
+  //   c10::CppTypeToScalarType<scalar_t>::value); out_col =
+  //   at::empty({total_num_edges}, c10::CppTypeToScalarType<scalar_t>::value);
+
+  //   if (save_edge_ids) {
+  //     out_edge_id = at::empty({total_num_edges},
+  //     c10::CppTypeToScalarType<scalar_t>::value);
+
+  //   }
+  //   scalar_t *out_edge_id_data = save_edge_ids ?
+  //   out_edge_id.value().data_ptr<scalar_t>() : nullptr;
+
+  //   // std::chrono::steady_clock::time_point begin =
+  //   std::chrono::steady_clock::now(); int idx = 0; for (size_t ell = 0; ell <
+  //   sampled_edges_size[0].size(); ++ell) {
+  //     for (auto subgraph_idx = 0; subgraph_idx < sampled_edges_size.size();
+  //          ++subgraph_idx) {
+  //       int64_t edge_idx =
+  //           ell > 0 ? sampled_edges_size[subgraph_idx][ell - 1] : 0;
+  //       int64_t end = sampled_edges_size[subgraph_idx][ell];
+  //       auto range = end - edge_idx;
+  //       for (auto j = 0; j < range; j++) {
+  //         int64_t inc_col_idx = 0;
+  //         for (int64_t inc_idx = increment_values[subgraph_idx].size() - 2;
+  //              inc_idx >= 0; --inc_idx) {
+  //           if (sampled_cols_vec_[subgraph_idx][edge_idx] >=
+  //               num_sampled_nodes[subgraph_idx][inc_idx]) {
+  //             inc_col_idx = inc_idx + 1;
+  //             break;
+  //           }
   //         }
+  //         out_col[idx] = sampled_cols_vec_[subgraph_idx][edge_idx] +
+  //                             increment_values[subgraph_idx][inc_col_idx];
+  //         // std::cout<<"out_col="<<out_col<<std::endl;
+
+  //         int64_t inc_row_idx = 0;
+  //         for (int64_t inc_idx = increment_values[subgraph_idx].size() - 2;
+  //              inc_idx >= 0; --inc_idx) {
+  //           if (sampled_rows_vec_[subgraph_idx][edge_idx] >=
+  //               num_sampled_nodes[subgraph_idx][inc_idx]) {
+  //             inc_row_idx = inc_idx + 1;
+  //             break;
+  //           }
+  //         }
+  //         out_row[idx] = sampled_rows_vec_[subgraph_idx][edge_idx] +
+  //                             increment_values[subgraph_idx][inc_row_idx];
+  //         // std::cout<<"out_row="<<out_row<<std::endl;
+
+  //         if (save_edge_ids) {
+  //           out_edge_id_data[idx] =
+  //               sampled_edge_ids_vec_[subgraph_idx][edge_idx];
+  //           // std::cout<<"out_edge_id="<<out_edge_id.value()<<std::endl;
+  //         }
+
+  //         // sampled_cols[idx] = sampled_cols_vec[subgraph_idx][edge_idx];
+  //         // sampled_rows[idx] = sampled_rows_vec[subgraph_idx][edge_idx];
+  //         edge_idx += 1;
+  //         idx += 1;
   //       }
-  //       sampled_rows_vec_[subgraph_idx][edge_idx] +=
-  //           increment_values[subgraph_idx][inc_row_idx];
   //     }
   //   }
+  //   // std::chrono::steady_clock::time_point end =
+  //   //   std::chrono::steady_clock::now();
+  //   // std::cout<<"time="<<(end - begin)<<std::endl;
+  // //   std::chrono::steady_clock::time_point end =
+  // std::chrono::steady_clock::now();
+  // // std::cout << "Total time: " <<
+  // std::chrono::duration_cast<std::chrono::microseconds>(end - begin).count()
+  // << std::endl;
   // }
 
  private:
@@ -665,11 +787,12 @@ sample(const at::Tensor& rowptr,
        const bool csc,
        const std::string temporal_strategy,
        const bool old) {
-  if (old) {
-    return sample_old<replace, directed, disjoint, return_edge_id, distributed>(
-        rowptr, col, seed, num_neighbors, time, seed_time, edge_weight, csc,
-        temporal_strategy);
-  }
+  // if (old) {
+  //   return sample_old<replace, directed, disjoint, return_edge_id,
+  //   distributed>(
+  //       rowptr, col, seed, num_neighbors, time, seed_time, edge_weight, csc,
+  //       temporal_strategy);
+  // }
   // std::chrono::steady_clock::time_point sampl_begin =
   //     std::chrono::steady_clock::now();
   TORCH_CHECK(!time.has_value() || disjoint,
